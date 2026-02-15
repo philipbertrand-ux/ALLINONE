@@ -1,1017 +1,23 @@
-// FILE: pubspec.yaml
-name: kid_clock_weather_planner
-description: Kid UI Clock + Weather + Planner + Alarms + Todos (Android + Windows)
-publish_to: "none"
-version: 1.0.0+1
-
-environment:
-  sdk: ">=3.4.0 <4.0.0"
-
-dependencies:
-  flutter:
-    sdk: flutter
-
-  intl: ^0.19.0
-  http: ^1.2.2
-
-  flutter_svg: ^2.0.10
-  timezone: ^0.10.0
-  flutter_local_notifications: ^18.0.1
-  table_calendar: ^3.1.2
-  shared_preferences: ^2.3.2
-
-  firebase_core: ^3.8.0
-  firebase_auth: ^5.3.0
-  cloud_functions: ^5.1.0
-  firebase_auth_desktop: ^1.0.0
-
-flutter:
-  uses-material-design: true
-  assets:
-    - assets/flags/
-    - assets/patterns/
-
-// FILE: .gitignore
-# Flutter/Dart
-.dart_tool/
-.buildlog
-.packages
-.pub/
-.pub-cache/
-build/
-
-# IDE
-.idea/
-.vscode/
-*.iml
-
-# Firebase configs (à garder hors repo si tu veux que chacun branche SON projet)
-android/app/google-services.json
-ios/Runner/GoogleService-Info.plist
-# (Optionnel) lib/firebase_options.dart
-
-# Windows build artifacts
-windows/flutter/ephemeral/
-
-// FILE: README.md
-# Kid Clock • Weather • Planner (Android + Windows)
-
-App Flutter “enfant” : Horloge multi‑villes, Météo (Open‑Meteo), Agenda semaine, Réveils multiples, To‑Do sobre.  
-Synchro téléphone ↔ PC **sans écran de login** : auth anonyme + appairage 6 chiffres / 3 minutes via Cloud Functions callable.
-
-## Onglets
-- Horloge (3 villes épinglées, drapeaux SVG “badge”)
-- Météo (Open‑Meteo)
-- Agenda (vue semaine)
-- Réveils (plusieurs alarmes + snooze)
-- To‑Do (liste séparée)
-
-## Setup Firebase
-1) Crée un projet Firebase.
-2) Ajoute une app **Android** (récupère `google-services.json`).
-3) Ajoute une app **Web** (sert de config pour Windows desktop).
-4) Active **Anonymous** dans Authentication.
-5) Déploie Functions + Rules (voir plus bas).
-
-### Générer `firebase_options.dart`
-Recommandé : FlutterFire CLI (`flutterfire configure`) puis commit ou pas selon ton choix.
-
-## Déployer Cloud Functions + Firestore rules
-```bash
-firebase login
-firebase init functions firestore
-firebase deploy --only functions
-firebase deploy --only firestore:rules
-flutter pub get
-flutter run -d android
-flutter pub get
-flutter run -d windows
-// FILE: firestore.rules
-rules_version = '2';
-service cloud.firestore {
-match /databases/{database}/documents {
-match /{document=**} {
-allow read, write: if false;
-}
-}
-}
-
-// FILE: firebase.json
-{
-"functions": { "source": "functions" },
-"firestore": { "rules": "firestore.rules" }
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// FLUTTER: lib/
-////////////////////////////////////////////////////////////////////////////////
-
-// FILE: lib/main.dart
-import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';
-
-import 'firebase_options.dart';
-import 'services/auth_service.dart';
-import 'services/tz_service.dart';
-import 'services/notifications_service.dart';
-import 'state/app_state.dart';
-import 'app.dart';
-
-Future<void> main() async {
-WidgetsFlutterBinding.ensureInitialized();
-
-await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-await TzService.init();
-await NotificationsService.init();
-await AuthService.ensureSignedInAnonymously();
-
-final appState = AppState();
-await appState.bootstrap();
-
-runApp(App(appState: appState));
-}
-
-// FILE: lib/firebase_options.dart
-// IMPORTANT: Remplace ce fichier via FlutterFire CLI (flutterfire configure)
-// ou colle ici les options Android + Web (Windows).
-import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
-
-class DefaultFirebaseOptions {
-static FirebaseOptions get currentPlatform {
-switch (defaultTargetPlatform) {
-case TargetPlatform.android:
-return const FirebaseOptions(
-apiKey: "ANDROID_API_KEY",
-appId: "ANDROID_APP_ID",
-messagingSenderId: "SENDER_ID",
-projectId: "PROJECT_ID",
-);
-case TargetPlatform.windows:
-return const FirebaseOptions(
-apiKey: "WEB_API_KEY",
-appId: "WEB_APP_ID",
-messagingSenderId: "SENDER_ID",
-projectId: "PROJECT_ID",
-authDomain: "PROJECT_ID.firebaseapp.com",
-storageBucket: "PROJECT_ID.appspot.com",
-);
-default:
-throw UnsupportedError('Platform not configured');
-}
-}
-}
-
-// FILE: lib/app.dart
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
-import 'package:flutter/material.dart';
-
-import 'core/theme/app_themes.dart';
-import 'state/app_state.dart';
-import 'state/app_state_scope.dart';
-
-import 'features/clock/clock_screen.dart';
-import 'features/weather/weather_screen.dart';
-import 'features/planner/planner_screen.dart';
-import 'features/alarms/alarms_screen.dart';
-import 'features/todos/todos_screen.dart';
-
-import 'features/settings/parent_gate_screen.dart';
-import 'features/pairing/windows_pairing_screen.dart';
-
-class App extends StatefulWidget {
-final AppState appState;
-const App({super.key, required this.appState});
-
-@override
-State<App> createState() => _AppState();
-}
-
-class _AppState extends State<App> {
-int index = 0;
-
-@override
-Widget build(BuildContext context) {
-return AppStateScope(
-appState: widget.appState,
-child: AnimatedBuilder(
-animation: widget.appState,
-builder: (_, __) {
-final kid = AppThemes.byId(widget.appState.settings.themeId);
-final themeLight = ThemeData(
-useMaterial3: true,
-colorScheme: kid.scheme(Brightness.light),
-fontFamily: kid.fontFamily,
-);
-final themeDark = ThemeData(
-useMaterial3: true,
-colorScheme: kid.scheme(Brightness.dark),
-fontFamily: kid.fontFamily,
-);
-      final pages = [
-        ClockScreen(appState: widget.appState),
-        WeatherScreen(appState: widget.appState),
-        PlannerScreen(appState: widget.appState),
-        AlarmsScreen(appState: widget.appState),
-        TodosScreen(appState: widget.appState),
-      ];
-
-      return MaterialApp(
-        debugShowCheckedModeBanner: false,
-        theme: themeLight,
-        darkTheme: themeDark,
-        themeMode: ThemeMode.system,
-        home: Scaffold(
-          body: pages[index],
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: index,
-            onDestinationSelected: (i) => setState(() => index = i),
-            destinations: const [
-              NavigationDestination(icon: Icon(Icons.schedule), label: 'Horloge'),
-              NavigationDestination(icon: Icon(Icons.wb_sunny), label: 'Météo'),
-              NavigationDestination(icon: Icon(Icons.event_note), label: 'Agenda'),
-              NavigationDestination(icon: Icon(Icons.alarm), label: 'Réveils'),
-              NavigationDestination(icon: Icon(Icons.checklist), label: 'To‑Do'),
-            ],
-          ),
-          floatingActionButton: _FabHub(appState: widget.appState),
-        ),
-      );
-    },
-  ),
-);
-}
-}
-
-class _FabHub extends StatelessWidget {
-final AppState appState;
-const _FabHub({required this.appState});
-
-@override
-Widget build(BuildContext context) {
-// Android = “espace parent” (PIN). Windows = écran appairage si pas connecté.
-if (defaultTargetPlatform == TargetPlatform.windows && !appState.isPaired) {
-return FloatingActionButton.extended(
-onPressed: () => Navigator.push(context, MaterialPageRoute(
-builder: (_) => WindowsPairingScreen(appState: appState),
-)),
-icon: const Icon(Icons.link),
-label: const Text('Connecter'),
-);
-}
-return FloatingActionButton.extended(
-  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ParentGateScreen())),
-  icon: const Icon(Icons.lock),
-  label: const Text('Parent'),
-);
-}
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// STATE
-////////////////////////////////////////////////////////////////////////////////
-
-// FILE: lib/state/settings.dart
-class UiModels {
-String clockId;
-String weatherId;
-String plannerId;
-
-UiModels({required this.clockId, required this.weatherId, required this.plannerId});
-
-Map<String, dynamic> toJson() => {'clockId': clockId, 'weatherId': weatherId, 'plannerId': plannerId};
-
-static UiModels fromJson(Map<String, dynamic> j) => UiModels(
-clockId: (j['clockId'] ?? 'CLOCK_10').toString(),
-weatherId: (j['weatherId'] ?? 'WEATHER_01').toString(),
-plannerId: (j['plannerId'] ?? 'PLANNER_02').toString(),
-);
-}
-
-class AppSettings {
-String themeId;
-bool capitalsEUEnabled;
-List<String> pinnedCityIds;
-UiModels uiModels;
-bool timeFormat24h;
-
-AppSettings({
-required this.themeId,
-required this.capitalsEUEnabled,
-required this.pinnedCityIds,
-required this.uiModels,
-required this.timeFormat24h,
-});
-
-Map<String, dynamic> toJson() => {
-'themeId': themeId,
-'capitalsEUEnabled': capitalsEUEnabled,
-'pinnedCityIds': pinnedCityIds,
-'uiModels': uiModels.toJson(),
-'timeFormat24h': timeFormat24h,
-};
-
-static AppSettings defaults() => AppSettings(
-themeId: 'T2',
-capitalsEUEnabled: true,
-pinnedCityIds: const ['FR_PARIS', 'RU_MOSCOW', 'RU_SAMARA'],
-uiModels: UiModels(clockId: 'CLOCK_10', weatherId: 'WEATHER_01', plannerId: 'PLANNER_02'),
-timeFormat24h: true,
-);
-
-static AppSettings fromJson(Map<String, dynamic> j) => AppSettings(
-themeId: (j['themeId'] ?? 'T2').toString(),
-capitalsEUEnabled: (j['capitalsEUEnabled'] ?? true) == true,
-pinnedCityIds: (j['pinnedCityIds'] as List? ?? const ['FR_PARIS','RU_MOSCOW','RU_SAMARA'])
-.map((e)=>e.toString()).toList(),
-uiModels: UiModels.fromJson(Map<String, dynamic>.from(j['uiModels'] ?? {})),
-timeFormat24h: (j['timeFormat24h'] ?? true) == true,
-);
-}
-
-// FILE: lib/state/app_state_scope.dart
-import 'package:flutter/widgets.dart';
-import 'app_state.dart';
-
-class AppStateScope extends InheritedWidget {
-final AppState appState;
-const AppStateScope({super.key, required this.appState, required super.child});
-
-static AppState of(BuildContext context) =>
-context.dependOnInheritedWidgetOfExactType<AppStateScope>()!.appState;
-
-@override
-bool updateShouldNotify(covariant AppStateScope oldWidget) => true;
-}
-
-// FILE: lib/state/app_state.dart
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
-import 'package:flutter/material.dart';
-import 'settings.dart';
-import '../services/auth_service.dart';
-import '../services/local_store.dart';
-import '../services/functions_service.dart';
-import '../services/notifications_service.dart';
-import '../services/local_todo_store.dart';
-import '../features/todos/todo.dart';
-
-class AppState extends ChangeNotifier {
-String? profileId; // owner uid (Android) ou owner uid appairé (Windows)
-AppSettings settings = AppSettings.defaults();
-
-List<Map<String, dynamic>> events = [];
-List<Map<String, dynamic>> alarms = [];
-List<Map<String, dynamic>> todos = [];
-
-bool get isPaired => profileId != null;
-
-Future<void> bootstrap() async {
-if (defaultTargetPlatform == TargetPlatform.android) {
-profileId = AuthService.uid;
-await refreshSnapshot();
-return;
-}
-if (defaultTargetPlatform == TargetPlatform.windows) {
-  final saved = await LocalStore.getWindowsProfileId();
-  profileId = saved;
-  await refreshSnapshot();
-  return;
-}
-
-profileId = AuthService.uid;
-await refreshSnapshot();
-}
-
-Future<void> refreshSnapshot() async {
-if (profileId == null) {
-// Pas appairé (Windows) => To-Do local uniquement
-final local = await LocalTodoStore.load();
-todos = local.map((t) => t.toJson()).toList();
-notifyListeners();
-return;
-}
-final snap = await FunctionsService.getSnapshot(profileId!);
-
-settings = AppSettings.fromJson(Map<String, dynamic>.from(snap['settings'] ?? {}));
-events = (snap['events'] as List? ?? const []).map((e) => Map<String, dynamic>.from(e)).toList();
-alarms = (snap['alarms'] as List? ?? const []).map((e) => Map<String, dynamic>.from(e)).toList();
-todos = (snap['todos'] as List? ?? const []).map((e) => Map<String, dynamic>.from(e)).toList();
-
-notifyListeners();
-
-await NotificationsService.rescheduleFromSnapshot(alarms: alarms);
-}
-
-Future<void> saveSettings(AppSettings next) async {
-settings = next;
-notifyListeners();
-if (profileId == null) return;
-await FunctionsService.updateSettings(profileId!, settings.toJson());
-await refreshSnapshot();
-}
-
-Future<void> upsertEvent(Map<String, dynamic> event) async {
-if (profileId == null) return;
-await FunctionsService.upsertEvent(profileId!, event);
-await refreshSnapshot();
-}
-
-Future<void> deleteEvent(String eventId) async {
-if (profileId == null) return;
-await FunctionsService.deleteEvent(profileId!, eventId);
-await refreshSnapshot();
-}
-
-Future<void> upsertAlarm(Map<String, dynamic> alarm) async {
-if (profileId == null) return;
-await FunctionsService.upsertAlarm(profileId!, alarm);
-await refreshSnapshot();
-}
-
-Future<void> deleteAlarm(String alarmId) async {
-if (profileId == null) return;
-await FunctionsService.deleteAlarm(profileId!, alarmId);
-await refreshSnapshot();
-}
-
-Future<void> upsertTodo(Map<String, dynamic> todo) async {
-if (profileId == null) {
-final list = await LocalTodoStore.load();
-final t = Todo.fromJson(todo);
-final id = t.id.isEmpty ? DateTime.now().microsecondsSinceEpoch.toString() : t.id;
-final saved = Todo(
-id: id,
-title: t.title,
-done: t.done,
-tag: t.tag,
-color: t.color,
-dueIso: t.dueIso,
-);
-final idx = list.indexWhere((x) => x.id == id);
-if (idx >= 0) list[idx] = saved; else list.add(saved);
-await LocalTodoStore.save(list);
-await refreshSnapshot();
-return;
-}
-await FunctionsService.upsertTodo(profileId!, todo);
-await refreshSnapshot();
-}
-
-Future<void> deleteTodo(String todoId) async {
-if (profileId == null) {
-final list = await LocalTodoStore.load()..removeWhere((t) => t.id == todoId);
-await LocalTodoStore.save(list);
-await refreshSnapshot();
-return;
-}
-await FunctionsService.deleteTodo(profileId!, todoId);
-await refreshSnapshot();
-}
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// CORE THEME + WIDGETS
-////////////////////////////////////////////////////////////////////////////////
-
-// FILE: lib/core/theme/kid_theme.dart
-import 'package:flutter/material.dart';
-
-enum PatternId { confetti, stars, leaves, waves, pixelGrid, stripes, graffiti, clouds, triangles, dots }
-
-class KidTheme {
-final String id;
-final String name;
-final Color seed;
-final PatternId patternId;
-final String fontFamily;
-
-const KidTheme({
-required this.id,
-required this.name,
-required this.seed,
-required this.patternId,
-required this.fontFamily,
-});
-
-ColorScheme scheme(Brightness b) => ColorScheme.fromSeed(seedColor: seed, brightness: b);
-}
-
-// FILE: lib/core/theme/app_themes.dart
 import 'package:flutter/material.dart';
 import 'kid_theme.dart';
 
 class AppThemes {
-static const all = <KidTheme>[
-KidTheme(id:'T1', name:'Confettis', seed: Color(0xFFFF4D6D), patternId: PatternId.confetti, fontFamily: 'Sans'),
-KidTheme(id:'T2', name:'Cosmos Pop', seed: Color(0xFF3A86FF), patternId: PatternId.stars, fontFamily: 'Sans'),
-KidTheme(id:'T3', name:'Jungle Joy', seed: Color(0xFF2DC653), patternId: PatternId.leaves, fontFamily: 'Sans'),
-KidTheme(id:'T4', name:'Océan Bonbon', seed: Color(0xFF00B4D8), patternId: PatternId.waves, fontFamily: 'Sans'),
-KidTheme(id:'T5', name:'Arcade Pixel', seed: Color(0xFF00F5D4), patternId: PatternId.pixelGrid, fontFamily: 'Sans'),
-KidTheme(id:'T6', name:'Bonbons Pastel', seed: Color(0xFFFFC6FF), patternId: PatternId.stripes, fontFamily: 'Sans'),
-KidTheme(id:'T7', name:'Skate Graffiti', seed: Color(0xFFFF006E), patternId: PatternId.graffiti, fontFamily: 'Sans'),
-KidTheme(id:'T8', name:'Soleil & Nuages', seed: Color(0xFFFFD60A), patternId: PatternId.clouds, fontFamily: 'Sans'),
-KidTheme(id:'T9', name:'Origami', seed: Color(0xFFA8DADC), patternId: PatternId.triangles, fontFamily: 'Sans'),
-KidTheme(id:'T10', name:'Minimal Fun', seed: Color(0xFFFF8FAB), patternId: PatternId.dots, fontFamily: 'Sans'),
-];
+  static const all = <KidTheme>[
+    KidTheme(id: 'T1', name: 'Confettis', seed: Color(0xFFFF4D6D), patternId: PatternId.confetti, fontFamily: 'Sans'),
+    KidTheme(id: 'T2', name: 'Cosmos Pop', seed: Color(0xFF3A86FF), patternId: PatternId.stars, fontFamily: 'Sans'),
+    KidTheme(id: 'T3', name: 'Jungle Joy', seed: Color(0xFF2DC653), patternId: PatternId.leaves, fontFamily: 'Sans'),
+    KidTheme(id: 'T4', name: 'Océan Bonbon', seed: Color(0xFF00B4D8), patternId: PatternId.waves, fontFamily: 'Sans'),
+    KidTheme(id: 'T5', name: 'Arcade Pixel', seed: Color(0xFF00F5D4), patternId: PatternId.pixelGrid, fontFamily: 'Sans'),
+    KidTheme(id: 'T6', name: 'Bonbons Pastel', seed: Color(0xFFFFC6FF), patternId: PatternId.stripes, fontFamily: 'Sans'),
+    KidTheme(id: 'T7', name: 'Skate Graffiti', seed: Color(0xFFFF006E), patternId: PatternId.graffiti, fontFamily: 'Sans'),
+    KidTheme(id: 'T8', name: 'Soleil & Nuages', seed: Color(0xFFFFD60A), patternId: PatternId.clouds, fontFamily: 'Sans'),
+    KidTheme(id: 'T9', name: 'Origami', seed: Color(0xFFA8DADC), patternId: PatternId.triangles, fontFamily: 'Sans'),
+    KidTheme(id: 'T10', name: 'Minimal Fun', seed: Color(0xFFFF8FAB), patternId: PatternId.dots, fontFamily: 'Sans'),
+  ];
 
-static KidTheme byId(String id) => all.firstWhere((t) => t.id == id, orElse: () => all
-​);
+  static KidTheme byId(String id) =>
+      all.firstWhere((t) => t.id == id, orElse: () => all.first);
 }
-
-// FILE: lib/core/widgets/pattern_background.dart
-import 'dart:math';
-import 'package:flutter/material.dart';
-import '../theme/kid_theme.dart';
-
-class PatternBackground extends StatelessWidget {
-final PatternId patternId;
-final Widget child;
-const PatternBackground({super.key, required this.patternId, required this.child});
-
-@override
-Widget build(BuildContext context) {
-final cs = Theme.of(context).colorScheme;
-return CustomPaint(painter: _PatternPainter(patternId, cs), child: child);
-}
-}
-
-class _PatternPainter extends CustomPainter {
-final PatternId id;
-final ColorScheme cs;
-_PatternPainter(this.id, this.cs);
-
-@override
-void paint(Canvas canvas, Size size) {
-canvas.drawRect(Offset.zero & size, Paint()..color = cs.surface);
-final rnd = Random(42);
-final p = Paint()..style = PaintingStyle.fill;
-
-void dot(Color c, double r, Offset o) {
-  p.color = c.withOpacity(0.10);
-  canvas.drawCircle(o, r, p);
-}
-
-switch (id) {
-  case PatternId.confetti:
-    for (int i=0; i<120; i++) {
-      dot([cs.primary, cs.secondary, cs.tertiary][i%3], 2 + rnd.nextDouble()*4,
-          Offset(rnd.nextDouble()*size.width, rnd.nextDouble()*size.height));
-    }
-    break;
-  case PatternId.waves:
-    p..style = PaintingStyle.stroke..strokeWidth=3..color = cs.secondary.withOpacity(0.12);
-    for (double y=20; y<size.height; y+=28) {
-      final path = Path()..moveTo(0, y);
-      for (double x=0; x<=size.width; x+=24) {
-        path.quadraticBezierTo(x+12, y-8, x+24, y);
-      }
-      canvas.drawPath(path, p);
-    }
-    break;
-  default:
-    for (int i=0; i<80; i++) {
-      dot(cs.outlineVariant, 2 + rnd.nextDouble()*3,
-          Offset(rnd.nextDouble()*size.width, rnd.nextDouble()*size.height));
-    }
-}
-}
-
-@override
-bool shouldRepaint(covariant _PatternPainter oldDelegate) => oldDelegate.id != id || oldDelegate.cs != cs;
-}
-
-// FILE: lib/core/widgets/kid_scaffold.dart
-import 'package:flutter/material.dart';
-import '../theme/app_themes.dart';
-import 'pattern_background.dart';
-
-class KidScaffold extends StatelessWidget {
-final String themeId;
-final PreferredSizeWidget? appBar;
-final Widget child;
-final Widget? floatingActionButton;
-
-const KidScaffold({
-super.key,
-required this.themeId,
-required this.child,
-this.appBar,
-this.floatingActionButton,
-});
-
-@override
-Widget build(BuildContext context) {
-final kid = AppThemes.byId(themeId);
-return PatternBackground(
-patternId: kid.patternId,
-child: Scaffold(
-backgroundColor: Colors.transparent,
-appBar: appBar,
-floatingActionButton: floatingActionButton,
-body: child,
-),
-);
-}
-}
-
-// FILE: lib/core/widgets/flag_badge.dart
-import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
-
-class FlagBadge extends StatelessWidget {
-final String assetPath;
-final double size;
-const FlagBadge({super.key, required this.assetPath, this.size = 28});
-
-@override
-Widget build(BuildContext context) {
-return ClipRRect(
-borderRadius: BorderRadius.circular(size * 0.28),
-child: Container(
-width: size, height: size,
-color: Colors.white.withOpacity(0.85),
-padding: const EdgeInsets.all(2),
-child: SvgPicture.asset(assetPath, fit: BoxFit.cover),
-),
-);
-}
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// DATA: City catalog (FR + RU + 27 capitales UE)
-////////////////////////////////////////////////////////////////////////////////
-
-// FILE: lib/data/city_catalog.dart
-class City {
-final String id;
-final String countryCode;
-final String countryNameFr;
-final String cityNameFr;
-final String tzIana;
-final double lat;
-final double lon;
-final String flagAsset;
-
-const City({
-required this.id,
-required this.countryCode,
-required this.countryNameFr,
-required this.cityNameFr,
-required this.tzIana,
-required this.lat,
-required this.lon,
-required this.flagAsset,
-});
-}
-
-class CityCatalog {
-// FR + RU (défaut)
-static const frParis = City(
-id: 'FR_PARIS', countryCode: 'FR', countryNameFr: 'France', cityNameFr: 'Paris',
-tzIana: 'Europe/Paris', lat: 48.8667, lon: 2.3333, flagAsset: 'assets/flags/fr.svg',
-);
-
-static const ruMoscow = City(
-id: 'RU_MOSCOW', countryCode: 'RU', countryNameFr: 'Russie', cityNameFr: 'Moscou',
-tzIana: 'Europe/Moscow', lat: 55.7522, lon: 37.6155, flagAsset: 'assets/flags/ru.svg',
-);
-
-static const ruSamara = City(
-id: 'RU_SAMARA', countryCode: 'RU', countryNameFr: 'Russie', cityNameFr: 'Samara',
-tzIana: 'Europe/Samara', lat: 53.1959, lon: 50.1008, flagAsset: 'assets/flags/ru.svg',
-);
-
-static const ruStPetersburg = City(
-id: 'RU_SAINT_PETERSBURG', countryCode: 'RU', countryNameFr: 'Russie', cityNameFr: 'Saint‑Pétersbourg',
-tzIana: 'Europe/Moscow', lat: 59.9311, lon: 30.3609, flagAsset: 'assets/flags/ru.svg',
-);
-
-// 27 capitales UE (noms FR + lat/lon + tzIana)
-static const eu = <City>[
-City(id:'EU_AT_VIENNE',countryCode:'AT',countryNameFr:'Autriche',cityNameFr:'Vienne',tzIana:'Europe/Vienna',lat:48.2,lon:16.3666,flagAsset:'assets/flags/at.svg'),
-City(id:'EU_BE_BRUXELLES',countryCode:'BE',countryNameFr:'Belgique',cityNameFr:'Bruxelles',tzIana:'Europe/Brussels',lat:50.8333,lon:4.3333,flagAsset:'assets/flags/be.svg'),
-City(id:'EU_BG_SOFIA',countryCode:'BG',countryNameFr:'Bulgarie',cityNameFr:'Sofia',tzIana:'Europe/Sofia',lat:42.6833,lon:23.3167,flagAsset:'assets/flags/bg.svg'),
-City(id:'EU_HR_ZAGREB',countryCode:'HR',countryNameFr:'Croatie',cityNameFr:'Zagreb',tzIana:'Europe/Belgrade',lat:45.8,lon:16.0,flagAsset:'assets/flags/hr.svg'),
-City(id:'EU_CY_NICOSIE',countryCode:'CY',countryNameFr:'Chypre',cityNameFr:'Nicosie',tzIana:'Asia/Nicosia',lat:35.1667,lon:33.3666,flagAsset:'assets/flags/cy.svg'),
-City(id:'EU_CZ_PRAGUE',countryCode:'CZ',countryNameFr:'Tchéquie',cityNameFr:'Prague',tzIana:'Europe/Prague',lat:50.0833,lon:14.466,flagAsset:'assets/flags/cz.svg'),
-City(id:'EU_DK_COPENHAGUE',countryCode:'DK',countryNameFr:'Danemark',cityNameFr:'Copenhague',tzIana:'Europe/Copenhagen',lat:55.6786,lon:12.5635,flagAsset:'assets/flags/dk.svg'),
-City(id:'EU_EE_TALLINN',countryCode:'EE',countryNameFr:'Estonie',cityNameFr:'Tallinn',tzIana:'Europe/Tallinn',lat:59.4339,lon:24.728,flagAsset:'assets/flags/ee.svg'),
-City(id:'EU_FI_HELSINKI',countryCode:'FI',countryNameFr:'Finlande',cityNameFr:'Helsinki',tzIana:'Europe/Helsinki',lat:60.1756,lon:24.9341,flagAsset:'assets/flags/fi.svg'),
-City(id:'EU_FR_PARIS',countryCode:'FR',countryNameFr:'France',cityNameFr:'Paris',tzIana:'Europe/Paris',lat:48.8667,lon:2.3333,flagAsset:'assets/flags/fr.svg'),
-City(id:'EU_DE_BERLIN',countryCode:'DE',countryNameFr:'Allemagne',cityNameFr:'Berlin',tzIana:'Europe/Berlin',lat:52.5218,lon:13.4015,flagAsset:'assets/flags/de.svg'),
-City(id:'EU_GR_ATHENES',countryCode:'GR',countryNameFr:'Grèce',cityNameFr:'Athènes',tzIana:'Europe/Athens',lat:37.9833,lon:23.7333,flagAsset:'assets/flags/gr.svg'),
-City(id:'EU_HU_BUDAPEST',countryCode:'HU',countryNameFr:'Hongrie',cityNameFr:'Budapest',tzIana:'Europe/Budapest',lat:47.5,lon:19.0833,flagAsset:'assets/flags/hu.svg'),
-City(id:'EU_IE_DUBLIN',countryCode:'IE',countryNameFr:'Irlande',cityNameFr:'Dublin',tzIana:'Europe/Dublin',lat:53.3331,lon:-6.2489,flagAsset:'assets/flags/ie.svg'),
-City(id:'EU_IT_ROME',countryCode:'IT',countryNameFr:'Italie',cityNameFr:'Rome',tzIana:'Europe/Rome',lat:41.896,lon:12.4833,flagAsset:'assets/flags/it.svg'),
-City(id:'EU_LV_RIGA',countryCode:'LV',countryNameFr:'Lettonie',cityNameFr:'Riga',tzIana:'Europe/Riga',lat:56.95,lon:24.1,flagAsset:'assets/flags/lv.svg'),
-City(id:'EU_LT_VILNIUS',countryCode:'LT',countryNameFr:'Lituanie',cityNameFr:'Vilnius',tzIana:'Europe/Vilnius',lat:54.6834,lon:25.3166,flagAsset:'assets/flags/lt.svg'),
-City(id:'EU_LU_LUXEMBOURG',countryCode:'LU',countryNameFr:'Luxembourg',cityNameFr:'Luxembourg',tzIana:'Europe/Brussels',lat:49.6117,lon:6.13,flagAsset:'assets/flags/lu.svg'),
-City(id:'EU_MT_LA_VALETTE',countryCode:'MT',countryNameFr:'Malte',cityNameFr:'La Valette',tzIana:'Europe/Malta',lat:35.8997,lon:14.5147,flagAsset:'assets/flags/mt.svg'),
-City(id:'EU_NL_AMSTERDAM',countryCode:'NL',countryNameFr:'Pays-Bas',cityNameFr:'Amsterdam',tzIana:'Europe/Brussels',lat:52.35,lon:4.9166,flagAsset:'assets/flags/nl.svg'),
-City(id:'EU_PL_VARSOVIE',countryCode:'PL',countryNameFr:'Pologne',cityNameFr:'Varsovie',tzIana:'Europe/Warsaw',lat:52.25,lon:21.0,flagAsset:'assets/flags/pl.svg'),
-City(id:'EU_PT_LISBONNE',countryCode:'PT',countryNameFr:'Portugal',cityNameFr:'Lisbonne',tzIana:'Europe/Lisbon',lat:38.7227,lon:-9.1449,flagAsset:'assets/flags/pt.svg'),
-City(id:'EU_RO_BUCAREST',countryCode:'RO',countryNameFr:'Roumanie',cityNameFr:'Bucarest',tzIana:'Europe/Bucharest',lat:44.4334,lon:26.0999,flagAsset:'assets/flags/ro.svg'),
-City(id:'EU_SK_BRATISLAVA',countryCode:'SK',countryNameFr:'Slovaquie',cityNameFr:'Bratislava',tzIana:'Europe/Prague',lat:48.15,lon:17.117,flagAsset:'assets/flags/sk.svg'),
-City(id:'EU_SI_LJUBLJANA',countryCode:'SI',countryNameFr:'Slovénie',cityNameFr:'Ljubljana',tzIana:'Europe/Belgrade',lat:46.0553,lon:14.515,flagAsset:'assets/flags/si.svg'),
-City(id:'EU_ES_MADRID',countryCode:'ES',countryNameFr:'Espagne',cityNameFr:'Madrid',tzIana:'Europe/Madrid',lat:40.4,lon:-3.6834,flagAsset:'assets/flags/es.svg'),
-City(id:'EU_SE_STOCKHOLM',countryCode:'SE',countryNameFr:'Suède',cityNameFr:'Stockholm',tzIana:'Europe/Berlin',lat:59.3508,lon:18.0973,flagAsset:'assets/flags/se.svg'),
-];
-
-static const all = <City>[frParis, ruMoscow, ruSamara, ruStPetersburg, ...eu];
-
-static List<City> byIds(List<String> ids) {
-final set = ids.toSet();
-return all.where((c) => set.contains(c.id)).toList();
-}
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// SERVICES
-////////////////////////////////////////////////////////////////////////////////
-
-// FILE: lib/services/auth_service.dart
-import 'package:firebase_auth/firebase_auth.dart';
-
-class AuthService {
-static final _auth = FirebaseAuth.instance;
-
-static String get uid => _auth.currentUser?.uid ?? '';
-
-static Future<void> ensureSignedInAnonymously() async {
-if (_auth.currentUser != null) return;
-await _auth.signInAnonymously();
-}
-}
-
-// FILE: lib/services/functions_service.dart
-import 'package:cloud_functions/cloud_functions.dart';
-
-class FunctionsService {
-static final _f = FirebaseFunctions.instance;
-
-static Future<Map<String, dynamic>> generatePairingCode() async {
-final res = await _f.httpsCallable('generatePairingCode').call();
-return Map<String, dynamic>.from(res.data);
-}
-
-static Future<Map<String, dynamic>> redeemPairingCode(String code) async {
-final res = await _f.httpsCallable('redeemPairingCode').call({'code': code});
-return Map<String, dynamic>.from(res.data);
-}
-
-static Future<Map<String, dynamic>> getSnapshot(String profileId) async {
-final res = await _f.httpsCallable('getSnapshot').call({'profileId': profileId});
-return Map<String, dynamic>.from(res.data);
-}
-
-static Future<void> updateSettings(String profileId, Map<String, dynamic> settings) async {
-await _f.httpsCallable('updateSettings').call({'profileId': profileId, 'settings': settings});
-}
-
-static Future<String> upsertEvent(String profileId, Map<String, dynamic> event) async {
-final res = await _f.httpsCallable('upsertEvent').call({'profileId': profileId, 'event': event});
-return (res.data['id'] ?? '').toString();
-}
-
-static Future<void> deleteEvent(String profileId, String eventId) async {
-await _f.httpsCallable('deleteEvent').call({'profileId': profileId, 'eventId': eventId});
-}
-
-static Future<String> upsertAlarm(String profileId, Map<String, dynamic> alarm) async {
-final res = await _f.httpsCallable('upsertAlarm').call({'profileId': profileId, 'alarm': alarm});
-return (res.data['id'] ?? '').toString();
-}
-
-static Future<void> deleteAlarm(String profileId, String alarmId) async {
-await _f.httpsCallable('deleteAlarm').call({'profileId': profileId, 'alarmId': alarmId});
-}
-
-static Future<String> upsertTodo(String profileId, Map<String, dynamic> todo) async {
-final res = await _f.httpsCallable('upsertTodo').call({'profileId': profileId, 'todo': todo});
-return (res.data['id'] ?? '').toString();
-}
-
-static Future<void> deleteTodo(String profileId, String todoId) async {
-await _f.httpsCallable('deleteTodo').call({'profileId': profileId, 'todoId': todoId});
-}
-}
-
-// FILE: lib/services/tz_service.dart
-import 'package:timezone/data/latest.dart' as tzdata;
-import 'package:timezone/timezone.dart' as tz;
-
-class TzService {
-static bool _inited = false;
-
-static Future<void> init() async {
-if (_inited) return;
-tzdata.initializeTimeZones();
-_inited = true;
-}
-
-static DateTime nowIn(String iana) {
-final loc = tz.getLocation(iana);
-return tz.TZDateTime.now(loc);
-}
-}
-
-// FILE: lib/services/notifications_service.dart
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import '../features/alarms/alarm.dart';
-import 'alarm_scheduler.dart';
-
-class NotificationsService {
-static final plugin = FlutterLocalNotificationsPlugin();
-static late final AlarmScheduler alarmScheduler;
-
-static Future<void> init() async {
-const init = InitializationSettings(
-android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-windows: WindowsInitializationSettings(appName: 'Kid Planner'),
-);
-await plugin.initialize(init);
-alarmScheduler = AlarmScheduler(plugin);
-}
-
-static Future<void> rescheduleFromSnapshot({
-required List<Map<String, dynamic>> alarms,
-}) async {
-final parsed = alarms.map((j) => Alarm.fromJson(j)).where((a) => a.id.isNotEmpty).toList();
-await alarmScheduler.cancelAllAlarms();
-await alarmScheduler.scheduleAlarms(parsed);
-}
-}
-
-// FILE: lib/services/alarm_scheduler.dart
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:timezone/timezone.dart' as tz;
-import '../features/alarms/alarm.dart';
-
-class AlarmScheduler {
-AlarmScheduler(this._plugin);
-final FlutterLocalNotificationsPlugin _plugin;
-
-int _stableId(String s) {
-const int fnvPrime = 0x01000193;
-int hash = 0x811C9DC5;
-for (final c in s.codeUnits) {
-hash ^= c;
-hash = (hash * fnvPrime) & 0xFFFFFFFF;
-}
-return hash & 0x7FFFFFFF;
-}
-
-tz.TZDateTime _nextWeekdayTime({
-required int weekdayMon1Sun7,
-required int hour,
-required int minute,
-}) {
-final now = tz.TZDateTime.now(tz.local);
-var scheduled = tz.TZDateTime(tz.local, now.year, now.month, now.day, hour, minute);
-int delta = (weekdayMon1Sun7 - scheduled.weekday) % 7;
-if (delta == 0 && scheduled.isBefore(now)) delta = 7;
-scheduled = scheduled.add(Duration(days: delta));
-return scheduled;
-}
-
-Future<void> cancelAllAlarms() async => _plugin.cancelAll();
-
-Future<void> scheduleAlarms(List<Alarm> alarms) async {
-for (final a in alarms.where((x) => x.enabled)) {
-for (final wd in a.weekdays) {
-final id = _stableId('alarm:${a.id}:wd:$wd');
-final when = _nextWeekdayTime(weekdayMon1Sun7: wd, hour: a.hour, minute: a.minute);
-    await _plugin.zonedSchedule(
-      id,
-      '⏰ ${a.label}',
-      'Réveil',
-      when,
-      const NotificationDetails(
-        android: AndroidNotificationDetails(
-          'alarms',
-          'Réveils',
-          channelDescription: 'Réveils de l’application',
-          importance: Importance.max,
-          priority: Priority.high,
-        ),
-        windows: WindowsNotificationDetails(),
-      ),
-      uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-      payload: 'alarm:${a.id}',
-      matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-    );
-  }
-}
-}
-}
-
-// FILE: lib/services/local_store.dart
-import 'package:shared_preferences/shared_preferences.dart';
-
-class LocalStore {
-static const _kParentPin = 'parent_pin';
-static const _kWindowsProfileId = 'windows_profile_id';
-
-static Future<String?> getParentPin() async {
-final p = await SharedPreferences.getInstance();
-return p.getString(_kParentPin);
-}
-
-static Future<void> setParentPin(String pin) async {
-final p = await SharedPreferences.getInstance();
-await p.setString(_kParentPin, pin);
-}
-
-static Future<String?> getWindowsProfileId() async {
-final p = await SharedPreferences.getInstance();
-return p.getString(_kWindowsProfileId);
-}
-
-static Future<void> setWindowsProfileId(String profileId) async {
-final p = await SharedPreferences.getInstance();
-await p.setString(_kWindowsProfileId, profileId);
-}
-}
-
-// FILE: lib/services/local_todo_store.dart
-import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../features/todos/todo.dart';
-
-class LocalTodoStore {
-static const _kTodosJson = 'local_todos_json';
-
-static Future<List<Todo>> load() async {
-final p = await SharedPreferences.getInstance();
-final raw = p.getString(_kTodosJson);
-if (raw == null || raw.isEmpty) return [];
-final decoded = (jsonDecode(raw) as List).cast<dynamic>();
-return decoded.map((e) => Todo.fromJson(Map<String, dynamic>.from(e))).toList();
-}
-
-static Future<void> save(List<Todo> todos) async {
-final p = await SharedPreferences.getInstance();
-final raw = jsonEncode(todos.map((t) => t.toJson()).toList());
-await p.setString(_kTodosJson, raw);
-}
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// FEATURES: CLOCK
-////////////////////////////////////////////////////////////////////////////////
-
-// FILE: lib/features/clock/clock_screen.dart
-import 'package:flutter/material.dart';
-import '../../core/widgets/kid_scaffold.dart';
-import '../../data/city_catalog.dart';
-import '../../state/app_state.dart';
-import 'clock_models.dart';
-
-class ClockScreen extends StatelessWidget {
-final AppState appState;
-const ClockScreen({super.key, required this.appState});
-
-@override
-Widget build(BuildContext context) {
-final pinned = CityCatalog.byIds(appState.settings.pinnedCityIds);
-return KidScaffold(
-themeId: appState.settings.themeId,
-appBar: AppBar(title: const Text('Horloge')),
-child: ClockModels.build(
-context,
-modelId: appState.settings.uiModels.clockId,
-pinned: pinned,
-timeFormat24h: appState.settings.timeFormat24h,
-),
-);
-}
-}
-
-// FILE: lib/features/clock/clock_models.dart
-import 'package:flutter/material.dart';
-import '../../data/city_catalog.dart';
-import 'models/clock_card_trio.dart';
-import 'models/clock_analog_trio.dart';
-import 'models/clock_hybrid.dart';
-import 'models/clock_ring.dart';
-
-class ClockModels {
-static Widget build(BuildContext context, {required String modelId, required List<City> pinned, required bool timeFormat24h}) {
-// 10 IDs, mappés sur 4 implémentations (variants) => compile, UI riche, code compact.
-if (modelId.startsWith('CLOCK_0') && (modelId == 'CLOCK_06' || modelId == 'CLOCK_07' || modelId == 'CLOCK_08' || modelId == 'CLOCK_09')) {
-return ClockAnalogTrio(pinned: pinned, variant: modelId);
-}
-switch (modelId) {
-case 'CLOCK_05': return ClockRing(pinned: pinned, timeFormat24h: timeFormat24h);
-case 'CLOCK_10': return ClockHybrid(pinned: pinned, timeFormat24h: timeFormat24h);
-default: return ClockCardTrio(pinned: pinned, timeFormat24h: timeFormat24h, variant: modelId);
-}
-}
-}
-
-// FILE: lib/features/clock/models/clock_card_trio.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../data/city_catalog.dart';
@@ -1019,80 +25,107 @@ import '../../../services/tz_service.dart';
 import '../../../core/widgets/flag_badge.dart';
 
 class ClockCardTrio extends StatefulWidget {
-final List<City> pinned;
-final bool timeFormat24h;
-final String variant;
-const ClockCardTrio({super.key, required this.pinned, required this.timeFormat24h, required this.variant});
+  final List<City> pinned;
+  final bool timeFormat24h;
+  final String variant;
 
-@override
-State<ClockCardTrio> createState() => _ClockCardTrioState();
+  const ClockCardTrio({
+    super.key,
+    required this.pinned,
+    required this.timeFormat24h,
+    required this.variant,
+  });
+
+  @override
+  State<ClockCardTrio> createState() => _ClockCardTrioState();
 }
 
 class _ClockCardTrioState extends State<ClockCardTrio> {
-late Timer _timer;
-@override void initState() { super.initState(); timer = Timer.periodic(const Duration(seconds: 1), () => setState(() {})); }
-@override void dispose() { _timer.cancel(); super.dispose(); }
+  late final Timer _timer;
 
-@override
-Widget build(BuildContext context) {
-final cs = Theme.of(context).colorScheme;
-return ListView(
-padding: const EdgeInsets.all(12),
-children: [
-for (final c in widget.pinned)
-Card(
-color: cs.surface.withOpacity(0.88),
-child: Padding(
-padding: const EdgeInsets.all(12),
-child: Row(
-children: [
-FlagBadge(assetPath: c.flagAsset, size: 32),
-const SizedBox(width: 10),
-Expanded(
-child: Text('${c.countryNameFr} — ${c.cityNameFr}', style: const TextStyle(fontWeight: FontWeight.w900)),
-),
-_TimePill(
-time: TzService.nowIn(c.tzIana),
-format24h: widget.timeFormat24h,
-accent: widget.variant == 'CLOCK_02' ? cs.tertiary : cs.primary,
-),
-],
-),
-),
-),
-],
-);
-}
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        for (final c in widget.pinned)
+          Card(
+            color: cs.surface.withOpacity(0.88),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  FlagBadge(assetPath: c.flagAsset, size: 32),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '${c.countryNameFr} — ${c.cityNameFr}',
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                  _TimePill(
+                    time: TzService.nowIn(c.tzIana),
+                    format24h: widget.timeFormat24h,
+                    accent: widget.variant == 'CLOCK_02' ? cs.tertiary : cs.primary,
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 class _TimePill extends StatelessWidget {
-final DateTime time;
-final bool format24h;
-final Color accent;
-const _TimePill({required this.time, required this.format24h, required this.accent});
+  final DateTime time;
+  final bool format24h;
+  final Color accent;
 
-@override
-Widget build(BuildContext context) {
-String hhmm() {
-final h = time.hour;
-final m = time.minute.toString().padLeft(2,'0');
-if (format24h) return '${h.toString().padLeft(2,'0')}:$m';
-final h12 = (h % 12 == 0) ? 12 : (h % 12);
-final ampm = h < 12 ? 'AM' : 'PM';
-return '${h12.toString().padLeft(2,'0')}:$m $ampm';
-}
-return Container(
-  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-  decoration: BoxDecoration(
-    color: accent.withOpacity(0.18),
-    borderRadius: BorderRadius.circular(18),
-  ),
-  child: Text(hhmm(), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
-);
-}
-}
+  const _TimePill({
+    required this.time,
+    required this.format24h,
+    required this.accent,
+  });
 
-// FILE: lib/features/clock/models/clock_analog_trio.dart
+  @override
+  Widget build(BuildContext context) {
+    String hhmm() {
+      final h = time.hour;
+      final m = time.minute.toString().padLeft(2, '0');
+      if (format24h) return '${h.toString().padLeft(2, '0')}:$m';
+      final h12 = (h % 12 == 0) ? 12 : (h % 12);
+      final ampm = h < 12 ? 'AM' : 'PM';
+      return '${h12.toString().padLeft(2, '0')}:$m $ampm';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: accent.withOpacity(0.18),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Text(
+        hhmm(),
+        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+      ),
+    );
+  }
+}
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -1101,103 +134,146 @@ import '../../../services/tz_service.dart';
 import '../../../core/widgets/flag_badge.dart';
 
 class ClockAnalogTrio extends StatefulWidget {
-final List<City> pinned;
-final String variant; // CLOCK_06..09
-const ClockAnalogTrio({super.key, required this.pinned, required this.variant});
+  final List<City> pinned;
+  final String variant; // CLOCK_06..09
 
-@override
-State<ClockAnalogTrio> createState() => _ClockAnalogTrioState();
+  const ClockAnalogTrio({
+    super.key,
+    required this.pinned,
+    required this.variant,
+  });
+
+  @override
+  State<ClockAnalogTrio> createState() => _ClockAnalogTrioState();
 }
 
 class _ClockAnalogTrioState extends State<ClockAnalogTrio> {
-late Timer _timer;
-@override void initState() { super.initState(); timer = Timer.periodic(const Duration(seconds: 1), () => setState(() {})); }
-@override void dispose() { _timer.cancel(); super.dispose(); }
+  late final Timer _timer;
 
-@override
-Widget build(BuildContext context) {
-final cs = Theme.of(context).colorScheme;
-return ListView(
-padding: const EdgeInsets.all(12),
-children: [
-for (final c in widget.pinned)
-Card(
-color: cs.surface.withOpacity(0.88),
-child: Padding(
-padding: const EdgeInsets.all(12),
-child: Row(
-children: [
-FlagBadge(assetPath: c.flagAsset, size: 32),
-const SizedBox(width: 10),
-Expanded(child: Text('${c.countryNameFr} — ${c.cityNameFr}', style: const TextStyle(fontWeight: FontWeight.w900))),
-SizedBox(
-width: 120, height: 120,
-child: CustomPaint(
-painter: _AnalogPainter(
-now: TzService.nowIn(c.tzIana),
-cs: cs,
-variant: widget.variant,
-),
-),
-)
-],
-),
-),
-),
-],
-);
-}
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        for (final c in widget.pinned)
+          Card(
+            color: cs.surface.withOpacity(0.88),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  FlagBadge(assetPath: c.flagAsset, size: 32),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '${c.countryNameFr} — ${c.cityNameFr}',
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 120,
+                    height: 120,
+                    child: CustomPaint(
+                      painter: _AnalogPainter(
+                        now: TzService.nowIn(c.tzIana),
+                        cs: cs,
+                        variant: widget.variant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 class _AnalogPainter extends CustomPainter {
-final DateTime now;
-final ColorScheme cs;
-final String variant;
-_AnalogPainter({required this.now, required this.cs, required this.variant});
+  final DateTime now;
+  final ColorScheme cs;
+  final String variant;
 
-@override
-void paint(Canvas canvas, Size size) {
-final center = Offset(size.width/2, size.height/2);
-final r = math.min(size.width, size.height) * 0.48;
-canvas.drawCircle(center, r, Paint()..color = cs.primaryContainer.withOpacity(0.35));
+  _AnalogPainter({
+    required this.now,
+    required this.cs,
+    required this.variant,
+  });
 
-final tick = Paint()
-  ..color = cs.onSurface.withOpacity(0.35)
-  ..strokeCap = StrokeCap.round;
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final r = math.min(size.width, size.height) * 0.48;
 
-for (int i=0; i<60; i++) {
-  final a = (math.pi*2) * (i/60) - math.pi/2;
-  final inner = r * (i%5==0 ? 0.78 : 0.86);
-  final p1 = center + Offset(math.cos(a)*inner, math.sin(a)*inner);
-  final p2 = center + Offset(math.cos(a)*r, math.sin(a)*r);
-  tick.strokeWidth = (i%5==0 ? 3 : 1.5);
-  canvas.drawLine(p1, p2, tick);
+    canvas.drawCircle(
+      center,
+      r,
+      Paint()..color = cs.primaryContainer.withOpacity(0.35),
+    );
+
+    final tick = Paint()
+      ..color = cs.onSurface.withOpacity(0.35)
+      ..strokeCap = StrokeCap.round;
+
+    for (int i = 0; i < 60; i++) {
+      final a = (math.pi * 2) * (i / 60) - math.pi / 2;
+      final inner = r * (i % 5 == 0 ? 0.78 : 0.86);
+      final p1 = center + Offset(math.cos(a) * inner, math.sin(a) * inner);
+      final p2 = center + Offset(math.cos(a) * r, math.sin(a) * r);
+      tick.strokeWidth = (i % 5 == 0 ? 3 : 1.5);
+      canvas.drawLine(p1, p2, tick);
+    }
+
+    final hour = (now.hour % 12) + now.minute / 60.0;
+    final minute = now.minute + now.second / 60.0;
+    final second = now.second.toDouble();
+
+    void hand(double value, double max, double len, double w, Color color) {
+      final a = (math.pi * 2) * (value / max) - math.pi / 2;
+      final p = center + Offset(math.cos(a) * len, math.sin(a) * len);
+      canvas.drawLine(
+        center,
+        p,
+        Paint()
+          ..color = color
+          ..strokeWidth = w
+          ..strokeCap = StrokeCap.round,
+      );
+    }
+
+    final handH = (variant == 'CLOCK_09') ? cs.onSurface : cs.primary;
+    final handM = (variant == 'CLOCK_08') ? cs.tertiary : cs.secondary;
+
+    hand(hour, 12, r * 0.52, 6, handH);
+    hand(minute, 60, r * 0.70, 4, handM);
+    if (variant != 'CLOCK_09') hand(second, 60, r * 0.78, 2, cs.error);
+
+    canvas.drawCircle(
+      center,
+      5,
+      Paint()..color = cs.onSurface.withOpacity(0.75),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _AnalogPainter oldDelegate) =>
+      oldDelegate.now.second != now.second || oldDelegate.variant != variant;
 }
-
-final hour = (now.hour % 12) + now.minute/60.0;
-final minute = now.minute + now.second/60.0;
-final second = now.second.toDouble();
-
-void hand(double value, double max, double len, double w, Color color) {
-  final a = (math.pi*2) * (value/max) - math.pi/2;
-  final p = center + Offset(math.cos(a)*len, math.sin(a)*len);
-  canvas.drawLine(center, p, Paint()..color=color..strokeWidth=w..strokeCap=StrokeCap.round);
-}
-
-final handH = (variant == 'CLOCK_09') ? cs.onSurface : cs.primary;
-final handM = (variant == 'CLOCK_08') ? cs.tertiary : cs.secondary;
-hand(hour, 12, r*0.52, 6, handH);
-hand(minute, 60, r*0.70, 4, handM);
-if (variant != 'CLOCK_09') hand(second, 60, r*0.78, 2, cs.error);
-
-canvas.drawCircle(center, 5, Paint()..color=cs.onSurface.withOpacity(0.75));
-}
-
-@override
-bool shouldRepaint(covariant _AnalogPainter oldDelegate) => oldDelegate.now.second != now.second || oldDelegate.variant != variant;
-}
-
-// FILE: lib/features/clock/models/clock_ring.dart
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -1205,394 +281,210 @@ import '../../../data/city_catalog.dart';
 import '../../../services/tz_service.dart';
 
 class ClockRing extends StatefulWidget {
-final List<City> pinned;
-final bool timeFormat24h;
-const ClockRing({super.key, required this.pinned, required this.timeFormat24h});
+  final List<City> pinned;
+  final bool timeFormat24h;
 
-@override
-State<ClockRing> createState() => _ClockRingState();
+  const ClockRing({
+    super.key,
+    required this.pinned,
+    required this.timeFormat24h,
+  });
+
+  @override
+  State<ClockRing> createState() => _ClockRingState();
 }
 
 class _ClockRingState extends State<ClockRing> {
-late Timer _timer;
-@override void initState() { super.initState(); timer = Timer.periodic(const Duration(seconds: 1), () => setState(() {})); }
-@override void dispose() { _timer.cancel(); super.dispose(); }
+  late final Timer _timer;
 
-@override
-Widget build(BuildContext context) {
-final cs = Theme.of(context).colorScheme;
-return GridView.count(
-padding: const EdgeInsets.all(12),
-crossAxisCount: 2,
-childAspectRatio: 1.05,
-children: [
-for (final c in widget.pinned)
-Card(
-color: cs.surface.withOpacity(0.88),
-child: Padding(
-padding: const EdgeInsets.all(12),
-child: Column(
-crossAxisAlignment: CrossAxisAlignment.start,
-children: [
-Text(c.cityNameFr, style: const TextStyle(fontWeight: FontWeight.w900)),
-const SizedBox(height: 6),
-Expanded(
-child: Center(
-child: SizedBox(
-width: 120, height: 120,
-child: CustomPaint(
-painter: _RingPainter(
-now: TzService.nowIn(c.tzIana),
-cs: cs,
-),
-),
-),
-),
-),
-],
-),
-),
-)
-],
-);
-}
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return GridView.count(
+      padding: const EdgeInsets.all(12),
+      crossAxisCount: 2,
+      childAspectRatio: 1.05,
+      children: [
+        for (final c in widget.pinned)
+          Card(
+            color: cs.surface.withOpacity(0.88),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(c.cityNameFr, style: const TextStyle(fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 6),
+                  Expanded(
+                    child: Center(
+                      child: SizedBox(
+                        width: 120,
+                        height: 120,
+                        child: CustomPaint(
+                          painter: _RingPainter(now: TzService.nowIn(c.tzIana), cs: cs),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 class _RingPainter extends CustomPainter {
-final DateTime now;
-final ColorScheme cs;
-_RingPainter({required this.now, required this.cs});
+  final DateTime now;
+  final ColorScheme cs;
 
-@override
-void paint(Canvas canvas, Size size) {
-final center = Offset(size.width/2, size.height/2);
-final r = math.min(size.width, size.height) * 0.42;
-final base = Paint()..style=PaintingStyle.stroke..strokeWidth=12..strokeCap=StrokeCap.round;
-canvas.drawCircle(center, r, base..color=cs.outlineVariant.withOpacity(0.25));
+  _RingPainter({required this.now, required this.cs});
 
-double frac(int value, int max) => value / max;
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final r = math.min(size.width, size.height) * 0.42;
 
-void arc(double f, Color color) {
-  final p = base..color=color.withOpacity(0.85);
-  canvas.drawArc(Rect.fromCircle(center: center, radius: r), -math.pi/2, math.pi*2*f, false, p);
-}
+    final base = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 12
+      ..strokeCap = StrokeCap.round;
 
-arc(frac(now.second, 60), cs.error);
-arc(frac(now.minute, 60), cs.secondary);
-arc(frac(now.hour % 12, 12), cs.primary);
+    canvas.drawCircle(center, r, base..color = cs.outlineVariant.withOpacity(0.25));
 
-final text = '${now.hour.toString().padLeft(2,'0')}:${now.minute.toString().padLeft(2,'0')}';
-final tp = TextPainter(
-  text: TextSpan(text: text, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface)),
-  textDirection: TextDirection.ltr,
-)..layout();
-tp.paint(canvas, center - Offset(tp.width/2, tp.height/2));
-}
+    double frac(int value, int max) => value / max;
 
-@override
-bool shouldRepaint(covariant _RingPainter oldDelegate) => oldDelegate.now.second != now.second;
-}
+    void arc(double f, Color color) {
+      final p = base..color = color.withOpacity(0.85);
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: r),
+        -math.pi / 2,
+        (math.pi * 2) * f,
+        false,
+        p,
+      );
+    }
 
-// FILE: lib/features/clock/models/clock_hybrid.dart
-import 'package:flutter/material.dart';
-import '../../../data/city_catalog.dart';
-import 'clock_analog_trio.dart';
-import 'clock_card_trio.dart';
+    arc(frac(now.second, 60), cs.error);
+    arc(frac(now.minute, 60), cs.secondary);
+    arc(frac(now.hour % 12, 12), cs.primary);
 
-class ClockHybrid extends StatelessWidget {
-final List<City> pinned;
-final bool timeFormat24h;
-const ClockHybrid({super.key, required this.pinned, required this.timeFormat24h});
-
-@override
-Widget build(BuildContext context) {
-return Column(
-children: [
-Expanded(child: ClockAnalogTrio(pinned: pinned, variant: 'CLOCK_08')),
-const Divider(height: 1),
-Expanded(child: ClockCardTrio(pinned: pinned, timeFormat24h: timeFormat24h, variant: 'CLOCK_04')),
-],
-);
-}
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// FEATURES: WEATHER (Open-Meteo)
-////////////////////////////////////////////////////////////////////////////////
-
-// FILE: lib/features/weather/weather_screen.dart
-import 'package:flutter/material.dart';
-import '../../core/widgets/kid_scaffold.dart';
-import '../../data/city_catalog.dart';
-import '../../state/app_state.dart';
-import 'weather_models.dart';
-
-class WeatherScreen extends StatelessWidget {
-final AppState appState;
-const WeatherScreen({super.key, required this.appState});
-
-@override
-Widget build(BuildContext context) {
-final pinned = CityCatalog.byIds(appState.settings.pinnedCityIds);
-return KidScaffold(
-themeId: appState.settings.themeId,
-appBar: AppBar(title: const Text('Météo')),
-child: WeatherModels.build(context, modelId: appState.settings.uiModels.weatherId, pinned: pinned),
-);
-}
-}
-
-// FILE: lib/features/weather/weather_models.dart
-import 'package:flutter/material.dart';
-import '../../data/city_catalog.dart';
-import 'models/weather_cards.dart';
-import 'models/weather_stickers.dart';
-
-class WeatherModels {
-static Widget build(BuildContext context, {required String modelId, required List<City> pinned}) {
-switch (modelId) {
-case 'WEATHER_04': return WeatherStickers(pinned: pinned, variant: modelId);
-default: return WeatherCards(pinned: pinned, variant: modelId);
-}
-}
-}
-
-// FILE: lib/features/weather/models/weather_cards.dart
-import 'package:flutter/material.dart';
-import '../../../data/city_catalog.dart';
-import '../../../services/weather/open_meteo_client.dart';
-
-class WeatherCards extends StatefulWidget {
-final List<City> pinned;
-final String variant;
-const WeatherCards({super.key, required this.pinned, required this.variant});
-
-@override
-State<WeatherCards> createState() => _WeatherCardsState();
-}
-
-class _WeatherCardsState extends State<WeatherCards> {
-final client = OpenMeteoClient();
-int selectedDayIndex = 0;
-Map<String, DailyForecast>? data;
-bool loading = true;
-
-@override
-void initState() {
-super.initState();
-_load();
-}
-
-Future<void> _load() async {
-setState(() { loading = true; });
-final out = <String, DailyForecast>{};
-for (final c in widget.pinned) {
-out[c.id] = await client.dailyForecast(lat: c.lat, lon: c.lon, timezone: c.tzIana);
-}
-setState(() { data = out; loading = false; });
-}
-
-@override
-Widget build(BuildContext context) {
-final cs = Theme.of(context).colorScheme;
-if (loading) return const Center(child: CircularProgressIndicator());
-return ListView(
-  padding: const EdgeInsets.all(12),
-  children: [
-    Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            const Text('Jour:', style: TextStyle(fontWeight: FontWeight.w900)),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Slider(
-                value: selectedDayIndex.toDouble(),
-                min: 0, max: 6,
-                divisions: 6,
-                label: 'J+${selectedDayIndex}',
-                onChanged: (v) => setState(() => selectedDayIndex = v.round()),
-              ),
-            ),
-          ],
-        ),
+    final text = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface),
       ),
-    ),
-    const SizedBox(height: 8),
-    for (final c in widget.pinned)
-      Builder(builder: (_) {
-        final f = data![c.id]!;
-        final d = f.days[selectedDayIndex];
-        return Card(
-          color: cs.surface.withOpacity(0.88),
-          child: ListTile(
-            title: Text('${c.cityNameFr}', style: const TextStyle(fontWeight: FontWeight.w900)),
-            subtitle: Text('${d.dateIso} • min ${d.tMin.toStringAsFixed(0)}° • max ${d.tMax.toStringAsFixed(0)}° • code ${d.weatherCode}'),
-            trailing: Icon(Icons.wb_sunny, color: cs.tertiary),
-          ),
-        );
-      }),
-  ],
-);
-}
-}
+      textDirection: TextDirection.ltr,
+    )..layout();
 
-// FILE: lib/features/weather/models/weather_stickers.dart
+    tp.paint(canvas, center - Offset(tp.width / 2, tp.height / 2));
+  }
+
+  @override
+  bool shouldRepaint(covariant _RingPainter oldDelegate) =>
+      oldDelegate.now.second != now.second;
+}
 import 'package:flutter/material.dart';
 import '../../../data/city_catalog.dart';
 import '../../../services/weather/open_meteo_client.dart';
 
 class WeatherStickers extends StatefulWidget {
-final List<City> pinned;
-final String variant;
-const WeatherStickers({super.key, required this.pinned, required this.variant});
+  final List<City> pinned;
+  final String variant;
 
-@override
-State<WeatherStickers> createState() => _WeatherStickersState();
+  const WeatherStickers({
+    super.key,
+    required this.pinned,
+    required this.variant,
+  });
+
+  @override
+  State<WeatherStickers> createState() => _WeatherStickersState();
 }
 
 class _WeatherStickersState extends State<WeatherStickers> {
-final client = OpenMeteoClient();
-Map<String, DailyForecast>? data;
-bool loading = true;
+  final client = OpenMeteoClient();
 
-@override
-void initState() { super.initState(); _load(); }
+  Map<String, DailyForecast>? data;
+  bool loading = true;
 
-Future<void> _load() async {
-setState(() => loading = true);
-final out = <String, DailyForecast>{};
-for (final c in widget.pinned) {
-out[c.id] = await client.dailyForecast(lat: c.lat, lon: c.lon, timezone: c.tzIana);
-}
-setState(() { data = out; loading = false; });
-}
+  @override
+  void initState() {
+    super.initState();
+    load();
+  }
 
-@override
-Widget build(BuildContext context) {
-final cs = Theme.of(context).colorScheme;
-if (loading) return const Center(child: CircularProgressIndicator());
-return GridView.count(
-  padding: const EdgeInsets.all(12),
-  crossAxisCount: 2,
-  childAspectRatio: 1.05,
-  children: [
-    for (final c in widget.pinned)
-      Builder(builder: (_) {
-        final today = data![c.id]!.days.first;
-        return Card(
-          color: cs.surface.withOpacity(0.88),
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(c.cityNameFr, style: const TextStyle(fontWeight: FontWeight.w900)),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: Center(
-                    child: Icon(Icons.cloud, size: 68, color: cs.secondary),
-                  ),
+  Future<void> load() async {
+    setState(() => loading = true);
+
+    final out = <String, DailyForecast>{};
+    for (final c in widget.pinned) {
+      out[c.id] = await client.dailyForecast(lat: c.lat, lon: c.lon, timezone: c.tzIana);
+    }
+
+    setState(() {
+      data = out;
+      loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    if (loading) return const Center(child: CircularProgressIndicator());
+
+    return GridView.count(
+      padding: const EdgeInsets.all(12),
+      crossAxisCount: 2,
+      childAspectRatio: 1.05,
+      children: [
+        for (final c in widget.pinned)
+          Builder(builder: (context) {
+            final today = data![c.id]!.days.first;
+
+            return Card(
+              color: cs.surface.withOpacity(0.88),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(c.cityNameFr, style: const TextStyle(fontWeight: FontWeight.w900)),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: Center(
+                        child: Icon(Icons.cloud, size: 68, color: cs.secondary),
+                      ),
+                    ),
+                    Text(
+                      'min ${today.tMin.toStringAsFixed(0)}°  max ${today.tMax.toStringAsFixed(0)}°',
+                      style: TextStyle(color: cs.onSurfaceVariant, fontWeight: FontWeight.w700),
+                    ),
+                  ],
                 ),
-                Text('min ${today.tMin.toStringAsFixed(0)}° • max ${today.tMax.toStringAsFixed(0)}°',
-                    style: TextStyle(color: cs.onSurfaceVariant, fontWeight: FontWeight.w700)),
-              ],
-            ),
-          ),
-        );
-      }),
-  ],
-);
+              ),
+            );
+          }),
+      ],
+    );
+  }
 }
-}
-
-// FILE: lib/services/weather/open_meteo_client.dart
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-
-class DailyDay {
-final String dateIso;
-final double tMin;
-final double tMax;
-final int weatherCode;
-DailyDay({required this.dateIso, required this.tMin, required this.tMax, required this.weatherCode});
-}
-
-class DailyForecast {
-final List<DailyDay> days;
-DailyForecast({required this.days});
-}
-
-class OpenMeteoClient {
-Future<DailyForecast> dailyForecast({
-required double lat,
-required double lon,
-required String timezone,
-}) async {
-final uri = Uri.parse('https://api.open-meteo.com/v1/forecast').replace(queryParameters: {
-'latitude': lat.toString(),
-'longitude': lon.toString(),
-'daily': 'temperature_2m_min,temperature_2m_max,weathercode',
-'timezone': timezone,
-});
-final res = await http.get(uri);
-if (res.statusCode != 200) {
-  throw Exception('Open-Meteo error ${res.statusCode}');
-}
-
-final j = jsonDecode(res.body) as Map<String, dynamic>;
-final daily = Map<String, dynamic>.from(j['daily'] as Map);
-
-final times = (daily['time'] as List).map((e) => e.toString()).toList();
-final tMin = (daily['temperature_2m_min'] as List).map((e) => (e as num).toDouble()).toList();
-final tMax = (daily['temperature_2m_max'] as List).map((e) => (e as num).toDouble()).toList();
-final codes = (daily['weathercode'] as List).map((e) => (e as num).toInt()).toList();
-
-final days = <DailyDay>[];
-for (int i=0; i<times.length && i<7; i++) {
-  days.add(DailyDay(dateIso: times[i], tMin: tMin[i], tMax: tMax[i], weatherCode: codes[i]));
-}
-return DailyForecast(days: days);
-}
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// FEATURES: PLANNER (Agenda semaine)
-////////////////////////////////////////////////////////////////////////////////
-
-// FILE: lib/features/planner/planner_screen.dart
-import 'package:flutter/material.dart';
-import '../../core/widgets/kid_scaffold.dart';
-import '../../state/app_state.dart';
-import '../settings/ui_gallery_screen.dart';
-import 'models/planner_week_stickers.dart';
-
-class PlannerScreen extends StatelessWidget {
-final AppState appState;
-const PlannerScreen({super.key, required this.appState});
-
-@override
-Widget build(BuildContext context) {
-return KidScaffold(
-themeId: appState.settings.themeId,
-appBar: AppBar(
-title: const Text('Agenda'),
-actions: [
-IconButton(
-icon: const Icon(Icons.palette),
-onPressed: () => Navigator.push(context, MaterialPageRoute(
-builder: (_) => UiGalleryScreen(appState: appState),
-)),
-)
-],
-),
-child: PlannerWeekStickers(appState: appState),
-);
-}
-}
-
-// FILE: lib/features/planner/models/planner_week_stickers.dart
 import 'package:flutter/material.dart';
 import 'package:table_calendar/table_calendar.dart';
 import '../../../state/app_state.dart';
@@ -1600,437 +492,258 @@ import '../widgets/event_editor.dart';
 import '../widgets/event_tile.dart';
 
 class PlannerWeekStickers extends StatefulWidget {
-final AppState appState;
-const PlannerWeekStickers({super.key, required this.appState});
+  final AppState appState;
 
-@override
-State<PlannerWeekStickers> createState() => _PlannerWeekStickersState();
+  const PlannerWeekStickers({super.key, required this.appState});
+
+  @override
+  State<PlannerWeekStickers> createState() => _PlannerWeekStickersState();
 }
 
 class _PlannerWeekStickersState extends State<PlannerWeekStickers> {
-DateTime focused = DateTime.now();
-DateTime selected = DateTime.now();
+  DateTime focused = DateTime.now();
+  DateTime selected = DateTime.now();
 
-List<Map<String, dynamic>> get _eventsForSelectedDay {
-final s = DateTime(selected.year, selected.month, selected.day);
-return widget.appState.events.where((e) {
-final startIso = (e['startAt'] ?? '').toString();
-final d = DateTime.tryParse(startIso);
-if (d == null) return false;
-final dd = DateTime(d.year, d.month, d.day);
-return dd == s;
-}).toList()
-..sort((a, b) => (a['startAt'] ?? '').toString().compareTo((b['startAt'] ?? '').toString()));
-}
+  List<Map<String, dynamic>> get eventsForSelectedDay {
+    final s = DateTime(selected.year, selected.month, selected.day);
+    return widget.appState.events
+        .where((e) {
+          final startIso = (e['startAt'] ?? '').toString();
+          final d = DateTime.tryParse(startIso);
+          if (d == null) return false;
+          final dd = DateTime(d.year, d.month, d.day);
+          return dd == s;
+        })
+        .toList()
+      ..sort((a, b) =>
+          (a['startAt'] ?? '').toString().compareTo((b['startAt'] ?? '').toString()));
+  }
 
-@override
-Widget build(BuildContext context) {
-final cs = Theme.of(context).colorScheme;
-return ListView(
-  padding: const EdgeInsets.all(12),
-  children: [
-    Card(
-      elevation: 0,
-      color: cs.surface.withOpacity(0.85),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: TableCalendar(
-          firstDay: DateTime.utc(2020, 1, 1),
-          lastDay: DateTime.utc(2035, 12, 31),
-          focusedDay: focused,
-          calendarFormat: CalendarFormat.week,
-          availableCalendarFormats: const {CalendarFormat.week: 'Semaine'},
-          headerStyle: const HeaderStyle(titleCentered: true, formatButtonVisible: false),
-          selectedDayPredicate: (d) => isSameDay(d, selected),
-          onDaySelected: (sel, foc) => setState(() { selected = sel; focused = foc; }),
-          calendarStyle: CalendarStyle(
-            selectedDecoration: BoxDecoration(color: cs.primary, shape: BoxShape.circle),
-            todayDecoration: BoxDecoration(color: cs.tertiary.withOpacity(0.6), shape: BoxShape.circle),
-            markerDecoration: BoxDecoration(color: cs.secondary, shape: BoxShape.circle),
-          ),
-          eventLoader: (day) {
-            final dd = DateTime(day.year, day.month, day.day);
-            return widget.appState.events.where((e) {
-              final startIso = (e['startAt'] ?? '').toString();
-              final d = DateTime.tryParse(startIso);
-              if (d == null) return false;
-              final ddd = DateTime(d.year, d.month, d.day);
-              return ddd == dd;
-            }).toList();
-          },
-        ),
-      ),
-    ),
-    const SizedBox(height: 10),
-    Row(
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
       children: [
-        Expanded(
-          child: Text(
-            'Événements du ${selected.day.toString().padLeft(2,'0')}/${selected.month.toString().padLeft(2,'0')}',
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+        Card(
+          elevation: 0,
+          color: cs.surface.withOpacity(0.85),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: TableCalendar(
+              firstDay: DateTime.utc(2020, 1, 1),
+              lastDay: DateTime.utc(2035, 12, 31),
+              focusedDay: focused,
+              calendarFormat: CalendarFormat.week,
+              availableCalendarFormats: const {CalendarFormat.week: 'Semaine'},
+              headerStyle: const HeaderStyle(
+                titleCentered: true,
+                formatButtonVisible: false,
+              ),
+              selectedDayPredicate: (d) => isSameDay(d, selected),
+              onDaySelected: (sel, foc) => setState(() {
+                selected = sel;
+                focused = foc;
+              }),
+              calendarStyle: CalendarStyle(
+                selectedDecoration:
+                    BoxDecoration(color: cs.primary, shape: BoxShape.circle),
+                todayDecoration: BoxDecoration(
+                    color: cs.tertiary.withOpacity(0.6), shape: BoxShape.circle),
+                markerDecoration:
+                    BoxDecoration(color: cs.secondary, shape: BoxShape.circle),
+              ),
+              eventLoader: (day) {
+                final dd = DateTime(day.year, day.month, day.day);
+                return widget.appState.events.where((e) {
+                  final startIso = (e['startAt'] ?? '').toString();
+                  final d = DateTime.tryParse(startIso);
+                  if (d == null) return false;
+                  final ddd = DateTime(d.year, d.month, d.day);
+                  return ddd == dd;
+                }).toList();
+              },
+            ),
           ),
         ),
-        FilledButton.icon(
-          onPressed: () async {
-            final created = await showEventEditor(context, initialDate: selected);
-            if (created != null) await widget.appState.upsertEvent(created);
-          },
-          icon: const Icon(Icons.add),
-          label: const Text('Ajouter'),
-        )
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Événements du ${selected.day.toString().padLeft(2, '0')}/${selected.month.toString().padLeft(2, '0')}',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+              ),
+            ),
+            FilledButton.icon(
+              onPressed: () async {
+                final created = await showEventEditor(context, initialDate: selected);
+                if (created != null) await widget.appState.upsertEvent(created);
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('Ajouter'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (eventsForSelectedDay.isEmpty)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'Rien aujourd’hui… Ajoute un événement !',
+                style: TextStyle(color: cs.onSurfaceVariant),
+              ),
+            ),
+          ),
+        for (final e in eventsForSelectedDay)
+          EventTile(
+            event: e,
+            onEdit: () async {
+              final updated = await showEventEditor(context, initialDate: selected, existing: e);
+              if (updated != null) await widget.appState.upsertEvent(updated);
+            },
+            onDelete: () async {
+              final id = (e['id'] ?? '').toString();
+              if (id.isNotEmpty) await widget.appState.deleteEvent(id);
+            },
+          ),
       ],
-    ),
-    const SizedBox(height: 8),
-    if (_eventsForSelectedDay.isEmpty)
-      Card(child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Text('Rien aujourd’hui. Ajoute un événement !', style: TextStyle(color: cs.onSurfaceVariant)),
-      )),
-    for (final e in _eventsForSelectedDay)
-      EventTile(
-        event: e,
-        onEdit: () async {
-          final updated = await showEventEditor(context, initialDate: selected, existing: e);
-          if (updated != null) await widget.appState.upsertEvent(updated);
-        },
-        onDelete: () async {
-          final id = (e['id'] ?? '').toString();
-          if (id.isNotEmpty) await widget.appState.deleteEvent(id);
-        },
-      ),
-  ],
-);
+    );
+  }
 }
-}
-
-// FILE: lib/features/planner/widgets/event_editor.dart
-import 'package:flutter/material.dart';
-
-const eventTypes = <Map<String, dynamic>>[
-{'id':'SCHOOL','label':'École','icon':Icons.school,'color':0xFF3A86FF},
-{'id':'HOMEWORK','label':'Devoirs','icon':Icons.edit_note,'color':0xFF8338EC},
-{'id':'EXAM','label':'Contrôle','icon':Icons.quiz,'color':0xFFFF006E},
-{'id':'SPORT','label':'Sport','icon':Icons.sports_soccer,'color':0xFF06D6A0},
-{'id':'MUSIC','label':'Musique','icon':Icons.music_note,'color':0xFFFFBE0B},
-{'id':'FRIENDS','label':'Amis','icon':Icons.groups,'color':0xFFFF4D6D},
-{'id':'FAMILY','label':'Famille','icon':Icons.family_restroom,'color':0xFFFB5607},
-{'id':'BIRTHDAY','label':'Anniversaire','icon':Icons.cake,'color':0xFFFFD166},
-{'id':'HEALTH','label':'Médecin','icon':Icons.medical_services,'color':0xFF00B4D8},
-{'id':'TRAVEL','label':'Voyage','icon':Icons.flight_takeoff,'color':0xFF457B9D},
-{'id':'CHORES','label':'Tâches','icon':Icons.checklist,'color':0xFF2DC653},
-{'id':'OTHER','label':'Autre','icon':Icons.star,'color':0xFFFF8FAB},
-];
-
-Future<Map<String, dynamic>?> showEventEditor(
-BuildContext context, {
-required DateTime initialDate,
-Map<String, dynamic>? existing,
-}) async {
-final titleCtl = TextEditingController(text: (existing?['title'] ?? '').toString());
-String typeId = (existing?['typeId'] ?? 'OTHER').toString();
-DateTime date = initialDate;
-TimeOfDay time = TimeOfDay.now();
-int reminder = (existing?['reminderMinutes'] ?? 0) as int;
-
-final startIso = (existing?['startAt'] ?? '').toString();
-final startParsed = DateTime.tryParse(startIso);
-if (startParsed != null) {
-date = DateTime(startParsed.year, startParsed.month, startParsed.day);
-time = TimeOfDay(hour: startParsed.hour, minute: startParsed.minute);
-}
-
-return showDialog<Map<String, dynamic>>(
-context: context,
-builder: (_) => AlertDialog(
-title: Text(existing == null ? 'Nouvel événement' : 'Modifier'),
-content: StatefulBuilder(
-builder: (context, setState) => SizedBox(
-width: 420,
-child: Column(
-mainAxisSize: MainAxisSize.min,
-children: [
-TextField(controller: titleCtl, decoration: const InputDecoration(labelText: 'Titre')),
-const SizedBox(height: 10),
-DropdownButtonFormField<String>(
-value: typeId,
-decoration: const InputDecoration(labelText: 'Type'),
-items: eventTypes.map((t) =>
-DropdownMenuItem(value: t['id'] as String, child: Text(t['label'] as String))
-).toList(),
-onChanged: (v) => setState(() => typeId = v ?? 'OTHER'),
-),
-const SizedBox(height: 10),
-Row(
-children: [
-Expanded(
-child: OutlinedButton.icon(
-icon: const Icon(Icons.calendar_month),
-label: Text('${date.day}/${date.month}/${date.year}'),
-onPressed: () async {
-final picked = await showDatePicker(
-context: context,
-initialDate: date,
-firstDate: DateTime(2020),
-lastDate: DateTime(2035),
-);
-if (picked != null) setState(() => date = DateTime(picked.year, picked.month, picked.day));
-},
-),
-),
-const SizedBox(width: 10),
-Expanded(
-child: OutlinedButton.icon(
-icon: const Icon(Icons.schedule),
-label: Text(time.format(context)),
-onPressed: () async {
-final picked = await showTimePicker(context: context, initialTime: time);
-if (picked != null) setState(() => time = picked);
-},
-),
-),
-],
-),
-const SizedBox(height: 10),
-DropdownButtonFormField<int>(
-value: reminder,
-decoration: const InputDecoration(labelText: 'Rappel'),
-items: const [
-DropdownMenuItem(value: 0, child: Text('Aucun')),
-DropdownMenuItem(value: 5, child: Text('5 min avant')),
-DropdownMenuItem(value: 15, child: Text('15 min avant')),
-DropdownMenuItem(value: 60, child: Text('1 h avant')),
-DropdownMenuItem(value: 1440, child: Text('La veille')),
-],
-onChanged: (v) => setState(() => reminder = v ?? 0),
-)
-],
-),
-),
-),
-actions: [
-TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuler')),
-FilledButton(
-onPressed: () {
-final start = DateTime(date.year, date.month, date.day, time.hour, time.minute);
-Navigator.pop(context, <String, dynamic>{
-if (existing?['id'] != null) 'id': existing!['id'],
-'title': titleCtl.text.trim(),
-'typeId': typeId,
-'startAt': start.toIso8601String(),
-'endAt': start.add(const Duration(minutes: 45)).toIso8601String(),
-'reminderMinutes': reminder,
-});
-},
-child: const Text('Enregistrer'),
-),
-],
-),
-);
-}
-
-// FILE: lib/features/planner/widgets/event_tile.dart
-import 'package:flutter/material.dart';
-import 'event_editor.dart';
-
-class EventTile extends StatelessWidget {
-final Map<String, dynamic> event;
-final VoidCallback onEdit;
-final VoidCallback onDelete;
-
-const EventTile({super.key, required this.event, required this.onEdit, required this.onDelete});
-
-@override
-Widget build(BuildContext context) {
-final cs = Theme.of(context).colorScheme;
-final typeId = (event['typeId'] ?? 'OTHER').toString();
-final type = eventTypes.firstWhere((t) => t['id'] == typeId, orElse: () => eventTypes.last);
-final title = (event['title'] ?? '').toString();
-final start = DateTime.tryParse((event['startAt'] ?? '').toString());
-final hhmm = (start == null)
-    ? '--:--'
-    : '${start.hour.toString().padLeft(2,'0')}:${start.minute.toString().padLeft(2,'0')}';
-
-final color = Color(type['color'] as int);
-final icon = type['icon'] as IconData;
-
-return Card(
-  child: ListTile(
-    leading: Container(
-      width: 44, height: 44,
-      decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(14)),
-      child: Icon(icon, color: color),
-    ),
-    title: Text(title.isEmpty ? '(Sans titre)' : title, style: const TextStyle(fontWeight: FontWeight.w800)),
-    subtitle: Text('$hhmm • ${type['label']}', style: TextStyle(color: cs.onSurfaceVariant)),
-    trailing: Wrap(
-      spacing: 6,
-      children: [
-        IconButton(onPressed: onEdit, icon: const Icon(Icons.edit)),
-        IconButton(onPressed: onDelete, icon: const Icon(Icons.delete_outline)),
-      ],
-    ),
-  ),
-);
-}
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// FEATURES: ALARMS
-////////////////////////////////////////////////////////////////////////////////
-
-// FILE: lib/features/alarms/alarm.dart
-class Alarm {
-final String id;
-final String label;
-final int hour;
-final int minute;
-final List<int> weekdays; // 1..7
-final bool enabled;
-final int snoozeMinutes;
-
-const Alarm({
-required this.id,
-required this.label,
-required this.hour,
-required this.minute,
-required this.weekdays,
-required this.enabled,
-required this.snoozeMinutes,
-});
-
-factory Alarm.fromJson(Map<String, dynamic> j) => Alarm(
-id: (j['id'] ?? '').toString(),
-label: (j['label'] ?? '').toString(),
-hour: (j['hour'] ?? 7) as int,
-minute: (j['minute'] ?? 30) as int,
-weekdays: (j['weekdays'] as List? ?? const [1,2,3,4,5]).map((e) => e as int).toList(),
-enabled: (j['enabled'] ?? true) == true,
-snoozeMinutes: (j['snoozeMinutes'] ?? 10) as int,
-);
-
-Map<String, dynamic> toJson() => {
-'id': id, 'label': label, 'hour': hour, 'minute': minute,
-'weekdays': weekdays, 'enabled': enabled, 'snoozeMinutes': snoozeMinutes,
-};
-
-Alarm copyWith({String? id, String? label, int? hour, int? minute, List<int>? weekdays, bool? enabled, int? snoozeMinutes}) => Alarm(
-id: id ?? this.id,
-label: label ?? this.label,
-hour: hour ?? this.hour,
-minute: minute ?? this.minute,
-weekdays: weekdays ?? this.weekdays,
-enabled: enabled ?? this.enabled,
-snoozeMinutes: snoozeMinutes ?? this.snoozeMinutes,
-);
-}
-
-// FILE: lib/features/alarms/alarm_editor.dart
 import 'package:flutter/material.dart';
 import 'alarm.dart';
 
 Future<Alarm?> showAlarmEditor(BuildContext context, {Alarm? existing}) async {
-final labelCtl = TextEditingController(text: existing?.label ?? 'École');
-var hour = existing?.hour ?? 7;
-var minute = existing?.minute ?? 30;
-var enabled = existing?.enabled ?? true;
-var snooze = existing?.snoozeMinutes ?? 10;
-var weekdays = (existing?.weekdays.toSet() ?? <int>{1,2,3,4,5});
+  final labelCtl = TextEditingController(text: existing?.label ?? 'École');
 
-return showDialog<Alarm>(
-context: context,
-builder: () => StatefulBuilder(
-builder: (context, setState) => AlertDialog(
-title: Text(existing == null ? 'Nouveau réveil' : 'Modifier réveil'),
-content: SizedBox(
-width: 420,
-child: Column(
-mainAxisSize: MainAxisSize.min,
-children: [
-TextField(controller: labelCtl, decoration: const InputDecoration(labelText: 'Nom')),
-const SizedBox(height: 10),
-Row(
-children: [
-Expanded(
-child: OutlinedButton.icon(
-icon: const Icon(Icons.schedule),
-label: Text('${hour.toString().padLeft(2,'0')}:${minute.toString().padLeft(2,'0')}'),
-onPressed: () async {
-final picked = await showTimePicker(
-context: context,
-initialTime: TimeOfDay(hour: hour, minute: minute),
-);
-if (picked != null) setState(() { hour = picked.hour; minute = picked.minute; });
-},
-),
-),
-const SizedBox(width: 10),
-Expanded(
-child: DropdownButtonFormField<int>(
-value: snooze,
-decoration: const InputDecoration(labelText: 'Snooze'),
-items: const [
-DropdownMenuItem(value: 5, child: Text('5 min')),
-DropdownMenuItem(value: 10, child: Text('10 min')),
-DropdownMenuItem(value: 15, child: Text('15 min')),
-],
-onChanged: (v) => setState(() => snooze = v ?? 10),
-),
-),
-],
-),
-const SizedBox(height: 10),
-Wrap(
-spacing: 6, runSpacing: 6,
-children: const [(1,'Lun'),(2,'Mar'),(3,'Mer'),(4,'Jeu'),(5,'Ven'),(6,'Sam'),(7,'Dim')].map((d) {
-// placeholder to satisfy const; rebuilt below
-return SizedBox.shrink();
-}).toList(),
-),
-Wrap(
-spacing: 6, runSpacing: 6,
-children: [
-for (final d in const [(1,'Lun'),(2,'Mar'),(3,'Mer'),(4,'Jeu'),(5,'Ven'),(6,'Sam'),(7,'Dim')])
-FilterChip(
-selected: weekdays.contains(d.$1),
-label: Text(d.$2),
-onSelected: () => setState(() {
-if (weekdays.contains(d.$1)) weekdays.remove(d.$1); else weekdays.add(d.$1);
-}),
-)
-],
-),
-const SizedBox(height: 8),
-SwitchListTile(
-value: enabled,
-onChanged: (v) => setState(() => enabled = v),
-title: const Text('Activé'),
-),
-],
-),
-),
-actions: [
-TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuler')),
-FilledButton(
-onPressed: () {
-Navigator.pop(context, Alarm(
-id: existing?.id ?? '',
-label: labelCtl.text.trim().isEmpty ? 'Réveil' : labelCtl.text.trim(),
-hour: hour,
-minute: minute,
-weekdays: weekdays.toList()..sort(),
-enabled: enabled,
-snoozeMinutes: snooze,
-));
-},
-child: const Text('Enregistrer'),
-)
-],
-),
-),
-);
+  int hour = existing?.hour ?? 7;
+  int minute = existing?.minute ?? 30;
+  bool enabled = existing?.enabled ?? true;
+  int snooze = existing?.snoozeMinutes ?? 10;
+
+  final weekdays = <int>{...(existing?.weekdays ?? const [1, 2, 3, 4, 5])};
+
+  const days = <(int, String)>[
+    (1, 'Lun'),
+    (2, 'Mar'),
+    (3, 'Mer'),
+    (4, 'Jeu'),
+    (5, 'Ven'),
+    (6, 'Sam'),
+    (7, 'Dim'),
+  ];
+
+  return showDialog<Alarm>(
+    context: context,
+    builder: (_) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        title: Text(existing == null ? 'Nouveau réveil' : 'Modifier réveil'),
+        content: SizedBox(
+          width: 420,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: labelCtl,
+                decoration: const InputDecoration(labelText: 'Nom'),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.schedule),
+                      label: Text(
+                        '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}',
+                      ),
+                      onPressed: () async {
+                        final picked = await showTimePicker(
+                          context: context,
+                          initialTime: TimeOfDay(hour: hour, minute: minute),
+                        );
+                        if (picked != null) {
+                          setState(() {
+                            hour = picked.hour;
+                            minute = picked.minute;
+                          });
+                        }
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: DropdownButtonFormField<int>(
+                      value: snooze,
+                      decoration: const InputDecoration(labelText: 'Snooze'),
+                      items: const [
+                        DropdownMenuItem(value: 5, child: Text('5 min')),
+                        DropdownMenuItem(value: 10, child: Text('10 min')),
+                        DropdownMenuItem(value: 15, child: Text('15 min')),
+                      ],
+                      onChanged: (v) => setState(() => snooze = v ?? 10),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final d in days)
+                    FilterChip(
+                      selected: weekdays.contains(d.$1),
+                      label: Text(d.$2),
+                      onSelected: (_) => setState(() {
+                        if (weekdays.contains(d.$1)) {
+                          weekdays.remove(d.$1);
+                        } else {
+                          weekdays.add(d.$1);
+                        }
+                      }),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                value: enabled,
+                onChanged: (v) => setState(() => enabled = v),
+                title: const Text('Activé'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final label = labelCtl.text.trim().isEmpty ? 'Réveil' : labelCtl.text.trim();
+              Navigator.pop(
+                context,
+                Alarm(
+                  id: existing?.id ?? '',
+                  label: label,
+                  hour: hour,
+                  minute: minute,
+                  weekdays: (weekdays.toList()..sort()),
+                  enabled: enabled,
+                  snoozeMinutes: snooze,
+                ),
+              );
+            },
+            child: const Text('Enregistrer'),
+          ),
+        ],
+      ),
+    ),
+  );
 }
-
-// FILE: lib/features/alarms/alarms_screen.dart
 import 'package:flutter/material.dart';
 import '../../core/widgets/kid_scaffold.dart';
 import '../../state/app_state.dart';
@@ -2038,940 +751,88 @@ import 'alarm.dart';
 import 'alarm_editor.dart';
 
 class AlarmsScreen extends StatelessWidget {
-final AppState appState;
-const AlarmsScreen({super.key, required this.appState});
+  final AppState appState;
 
-@override
-Widget build(BuildContext context) {
-final alarms = appState.alarms.map((j) => Alarm.fromJson(j)).toList()
-..sort((a,b) => (a.hour60+a.minute).compareTo(b.hour60+b.minute));
-return KidScaffold(
-  themeId: appState.settings.themeId,
-  appBar: AppBar(title: const Text('Réveils')),
-  floatingActionButton: FloatingActionButton.extended(
-    onPressed: () async {
-      final created = await showAlarmEditor(context);
-      if (created != null) await appState.upsertAlarm(created.toJson());
-    },
-    icon: const Icon(Icons.add_alarm),
-    label: const Text('Ajouter'),
-  ),
-  child: ListView(
-    padding: const EdgeInsets.all(12),
-    children: [
-      for (final a in alarms)
-        Card(
-          child: ListTile(
-            leading: const Icon(Icons.alarm),
-            title: Text(
-              '${a.hour.toString().padLeft(2,'0')}:${a.minute.toString().padLeft(2,'0')} • ${a.label}',
-              style: const TextStyle(fontWeight: FontWeight.w900),
-            ),
-            subtitle: Text(_weekdaysLabel(a.weekdays)),
-            trailing: Switch(
-              value: a.enabled,
-              onChanged: (v) => appState.upsertAlarm(a.copyWith(enabled: v).toJson()),
-            ),
-            onTap: () async {
-              final updated = await showAlarmEditor(context, existing: a);
-              if (updated != null) await appState.upsertAlarm(updated.toJson());
-            },
-            onLongPress: () async {
-              final ok = await showDialog<bool>(
-                context: context,
-                builder: (_) => AlertDialog(
-                  title: const Text('Supprimer ?'),
-                  content: Text('Supprimer "${a.label}" ?'),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Annuler')),
-                    FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Supprimer')),
-                  ],
+  const AlarmsScreen({super.key, required this.appState});
+
+  @override
+  Widget build(BuildContext context) {
+    final alarms = appState.alarms
+        .map((j) => Alarm.fromJson(j))
+        .toList()
+      ..sort((a, b) =>
+          (a.hour * 60 + a.minute).compareTo(b.hour * 60 + b.minute));
+
+    return KidScaffold(
+      themeId: appState.settings.themeId,
+      appBar: AppBar(title: const Text('Réveils')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () async {
+          final created = await showAlarmEditor(context);
+          if (created != null) await appState.upsertAlarm(created.toJson());
+        },
+        icon: const Icon(Icons.add_alarm),
+        label: const Text('Ajouter'),
+      ),
+      child: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          for (final a in alarms)
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.alarm),
+                title: Text(
+                  '${a.hour.toString().padLeft(2, '0')}:${a.minute.toString().padLeft(2, '0')}  ${a.label}',
+                  style: const TextStyle(fontWeight: FontWeight.w900),
                 ),
-              );
-              if (ok == true) await appState.deleteAlarm(a.id);
-            },
-          ),
-        )
-    ],
-  ),
-);
-}
-
-String _weekdaysLabel(List<int> wds) {
-const names = {1:'Lun',2:'Mar',3:'Mer',4:'Jeu',5:'Ven',6:'Sam',7:'Dim'};
-if (wds.isEmpty) return 'Aucun jour';
-return wds.map((d) => names[d] ?? '?').join(' ');
-}
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// FEATURES: TODOS (onglet séparé, sobre)
-////////////////////////////////////////////////////////////////////////////////
-
-// FILE: lib/features/todos/todo.dart
-class Todo {
-final String id;
-final String title;
-final bool done;
-final String tag;
-final int color;
-final String? dueIso;
-
-const Todo({
-required this.id,
-required this.title,
-required this.done,
-required this.tag,
-required this.color,
-this.dueIso,
-});
-
-factory Todo.fromJson(Map<String, dynamic> j) => Todo(
-id: (j['id'] ?? '').toString(),
-title: (j['title'] ?? '').toString(),
-done: (j['done'] ?? false) == true,
-tag: (j['tag'] ?? 'Autre').toString(),
-color: (j['color'] ?? 0xFF3A86FF) as int,
-dueIso: (j['dueIso'] as String?),
-);
-
-Map<String, dynamic> toJson() => {'id': id, 'title': title, 'done': done, 'tag': tag, 'color': color, 'dueIso': dueIso};
-
-Todo copyWith({String? title, bool? done, String? tag, int? color, String? dueIso}) => Todo(
-id: id,
-title: title ?? this.title,
-done: done ?? this.done,
-tag: tag ?? this.tag,
-color: color ?? this.color,
-dueIso: dueIso ?? this.dueIso,
-);
-}
-
-// FILE: lib/features/todos/todo_editor.dart
-import 'package:flutter/material.dart';
-import 'todo.dart';
-
-const todoTags = ['Devoirs', 'Maison', 'Sport', 'Musique', 'Amis', 'Autre'];
-const tagColors = {
-'Devoirs': 0xFF8338EC,
-'Maison' : 0xFF2DC653,
-'Sport' : 0xFF06D6A0,
-'Musique': 0xFFFFBE0B,
-'Amis' : 0xFFFF4D6D,
-'Autre' : 0xFF3A86FF,
-};
-
-Future<Todo?> showTodoEditor(BuildContext context, {Todo? existing}) async {
-final titleCtl = TextEditingController(text: existing?.title ?? '');
-String tag = existing?.tag ?? 'Devoirs';
-
-return showDialog<Todo>(
-context: context,
-builder: (_) => StatefulBuilder(
-builder: (context, setState) => AlertDialog(
-title: Text(existing == null ? 'Nouvelle tâche' : 'Modifier tâche'),
-content: SizedBox(
-width: 420,
-child: Column(
-mainAxisSize: MainAxisSize.min,
-children: [
-TextField(controller: titleCtl, decoration: const InputDecoration(labelText: 'Tâche')),
-const SizedBox(height: 10),
-DropdownButtonFormField<String>(
-value: tag,
-decoration: const InputDecoration(labelText: 'Catégorie'),
-items: todoTags.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
-onChanged: (v) => setState(() => tag = v ?? 'Devoirs'),
-),
-],
-),
-),
-actions: [
-TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuler')),
-FilledButton(
-onPressed: () {
-Navigator.pop(context, Todo(
-id: existing?.id ?? '',
-title: titleCtl.text.trim(),
-done: existing?.done ?? false,
-tag: tag,
-color: tagColors[tag] ?? 0xFF3A86FF,
-));
-},
-child: const Text('Enregistrer'),
-),
-],
-),
-),
-);
-}
-
-// FILE: lib/features/todos/todos_screen.dart
-import 'package:flutter/material.dart';
-import '../../core/widgets/kid_scaffold.dart';
-import '../../state/app_state.dart';
-import 'todo.dart';
-import 'todo_editor.dart';
-
-class TodosScreen extends StatelessWidget {
-final AppState appState;
-const TodosScreen({super.key, required this.appState});
-
-@override
-Widget build(BuildContext context) {
-final list = appState.todos.map((j) => Todo.fromJson(j)).toList()
-..sort((a,b) => (a.done ? 1 : 0).compareTo(b.done ? 1 : 0));
-return KidScaffold(
-  themeId: appState.settings.themeId,
-  appBar: AppBar(title: const Text('To‑Do')),
-  floatingActionButton: FloatingActionButton.extended(
-    onPressed: () async {
-      final created = await showTodoEditor(context);
-      if (created != null) await appState.upsertTodo(created.toJson());
-    },
-    icon: const Icon(Icons.add_task),
-    label: const Text('Ajouter'),
-  ),
-  child: ListView(
-    padding: const EdgeInsets.all(12),
-    children: [
-      for (final t in list)
-        Card(
-          child: ListTile(
-            leading: _Sticker(color: Color(t.color), done: t.done),
-            title: Text(
-              t.title.isEmpty ? '(Sans titre)' : t.title,
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                decoration: t.done ? TextDecoration.lineThrough : null,
+                subtitle: Text(weekdaysLabel(a.weekdays)),
+                trailing: Switch(
+                  value: a.enabled,
+                  onChanged: (v) => appState.upsertAlarm(a.copyWith(enabled: v).toJson()),
+                ),
+                onTap: () async {
+                  final updated = await showAlarmEditor(context, existing: a);
+                  if (updated != null) await appState.upsertAlarm(updated.toJson());
+                },
+                onLongPress: () async {
+                  final ok = await showDialog<bool>(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      title: const Text('Supprimer ?'),
+                      content: Text('Supprimer "${a.label}" ?'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('Annuler'),
+                        ),
+                        FilledButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          child: const Text('Supprimer'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (ok == true) await appState.deleteAlarm(a.id);
+                },
               ),
             ),
-            subtitle: Text(t.tag),
-            trailing: Checkbox(
-              value: t.done,
-              onChanged: (v) => appState.upsertTodo(t.copyWith(done: v ?? false).toJson()),
-            ),
-            onTap: () async {
-              final updated = await showTodoEditor(context, existing: t);
-              if (updated != null) await appState.upsertTodo(updated.toJson());
-            },
-            onLongPress: () async {
-              final ok = await showDialog<bool>(
-                context: context,
-                builder: (_) => AlertDialog(
-                  title: const Text('Supprimer ?'),
-                  content: Text('Supprimer "${t.title}" ?'),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Annuler')),
-                    FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Supprimer')),
-                  ],
-                ),
-              );
-              if (ok == true) await appState.deleteTodo(t.id);
-            },
-          ),
-        ),
-    ],
-  ),
-);
-}
-}
-
-class _Sticker extends StatelessWidget {
-final Color color;
-final bool done;
-const _Sticker({required this.color, required this.done});
-
-@override
-Widget build(BuildContext context) {
-return Container(
-width: 44, height: 44,
-decoration: BoxDecoration(
-color: color.withOpacity(done ? 0.20 : 0.35),
-borderRadius: BorderRadius.circular(14),
-),
-child: Icon(done ? Icons.check : Icons.circle, color: color),
-);
-}
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// FEATURES: SETTINGS (Parent PIN + Galerie + Pairing)
-////////////////////////////////////////////////////////////////////////////////
-
-// FILE: lib/features/settings/parent_gate_screen.dart
-import 'package:flutter/material.dart';
-import '../../services/local_store.dart';
-import 'parent_hub_screen.dart';
-
-class ParentGateScreen extends StatefulWidget {
-const ParentGateScreen({super.key});
-@override
-State<ParentGateScreen> createState() => _ParentGateScreenState();
-}
-
-class _ParentGateScreenState extends State<ParentGateScreen> {
-final _pinCtl = TextEditingController();
-String? _savedPin;
-String? _error;
-bool _loading = true;
-
-@override
-void initState() { super.initState(); _load(); }
-
-Future<void> _load() async {
-_savedPin = await LocalStore.getParentPin();
-setState(() => _loading = false);
-}
-
-bool _isValidPin(String s) => RegExp(r'^\d{4}$').hasMatch(s);
-
-Future<void> _submit() async {
-final pin = _pinCtl.text.trim();
-if (!_isValidPin(pin)) { setState(() => _error = 'Choisis un code à 4 chiffres.'); return; }
-if (_savedPin == null) {
-  await LocalStore.setParentPin(pin);
-  if (!mounted) return;
-  Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ParentHubScreen()));
-  return;
-}
-
-if (pin != _savedPin) { setState(() => _error = 'Code incorrect.'); return; }
-Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ParentHubScreen()));
-}
-
-@override
-Widget build(BuildContext context) {
-if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-final isCreate = _savedPin == null;
-return Scaffold(
-  appBar: AppBar(title: Text(isCreate ? 'Créer le code parent' : 'Espace parent')),
-  body: Padding(
-    padding: const EdgeInsets.all(16),
-    child: Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 420),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              isCreate ? 'Choisis un code parent (4 chiffres).' : 'Entre le code parent (4 chiffres).',
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: _pinCtl,
-              keyboardType: TextInputType.number,
-              obscureText: true,
-              maxLength: 4,
-              decoration: InputDecoration(
-                labelText: 'Code',
-                errorText: _error,
-                border: const OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 10),
-            FilledButton.icon(
-              onPressed: _submit,
-              icon: const Icon(Icons.lock_open),
-              label: Text(isCreate ? 'Créer' : 'Entrer'),
-            ),
-          ],
-        ),
+        ],
       ),
-    ),
-  ),
-);
-}
+    );
+  }
 }
 
-// FILE: lib/features/settings/parent_hub_screen.dart
-import 'package:flutter/material.dart';
-import '../../state/app_state.dart';
-import '../../state/app_state_scope.dart';
-import 'parent_pairing_screen.dart';
-import 'ui_gallery_screen.dart';
-
-class ParentHubScreen extends StatelessWidget {
-const ParentHubScreen({super.key});
-
-@override
-Widget build(BuildContext context) {
-final appState = AppStateScope.of(context);
-return Scaffold(
-  appBar: AppBar(title: const Text('Espace parent')),
-  body: ListView(
-    padding: const EdgeInsets.all(12),
-    children: [
-      Card(
-        child: ListTile(
-          leading: const Icon(Icons.sync),
-          title: const Text('Synchroniser un PC Windows', style: TextStyle(fontWeight: FontWeight.w800)),
-          subtitle: const Text('Code 6 chiffres • valable 3 minutes • régénération auto'),
-          onTap: () => Navigator.push(context, MaterialPageRoute(
-            builder: (_) => ParentPairingScreen(appState: appState),
-          )),
-        ),
-      ),
-      Card(
-        child: ListTile(
-          leading: const Icon(Icons.palette),
-          title: const Text('Galerie UI (thèmes)', style: TextStyle(fontWeight: FontWeight.w800)),
-          subtitle: const Text('Changer le thème'),
-          onTap: () => Navigator.push(context, MaterialPageRoute(
-            builder: (_) => UiGalleryScreen(appState: appState),
-          )),
-        ),
-      ),
-    ],
-  ),
-);
-}
+String weekdaysLabel(List<int> wds) {
+  const names = <int, String>{
+    1: 'Lun',
+    2: 'Mar',
+    3: 'Mer',
+    4: 'Jeu',
+    5: 'Ven',
+    6: 'Sam',
+    7: 'Dim',
+  };
+  if (wds.isEmpty) return 'Aucun jour';
+  return wds.map((d) => names[d] ?? '?').join(' ');
 }
 
-// FILE: lib/features/settings/parent_pairing_screen.dart
-import 'dart:async';
-import 'package:flutter/material.dart';
-import '../../services/functions_service.dart';
-import '../../state/app_state.dart';
-
-class ParentPairingScreen extends StatefulWidget {
-final AppState appState;
-const ParentPairingScreen({super.key, required this.appState});
-
-@override
-State<ParentPairingScreen> createState() => _ParentPairingScreenState();
-}
-
-class _ParentPairingScreenState extends State<ParentPairingScreen> {
-Timer? _timer;
-String _code = '------';
-int _secondsLeft = 0;
-bool _busy = false;
-
-@override
-void initState() { super.initState(); _generate(); }
-
-@override
-void dispose() { _timer?.cancel(); super.dispose(); }
-
-Future<void> _generate() async {
-if (_busy) return;
-setState(() => _busy = true);
-final res = await FunctionsService.generatePairingCode();
-final code = (res['code'] ?? '------').toString();
-final expiresAtMs = (res['expiresAt'] ?? 0) as int;
-final now = DateTime.now().millisecondsSinceEpoch;
-final left = ((expiresAtMs - now) / 1000).floor().clamp(0, 999999);
-
-_timer?.cancel();
-_timer = Timer.periodic(const Duration(seconds: 1), (_) {
-  setState(() => _secondsLeft = (_secondsLeft - 1).clamp(0, 999999));
-  if (_secondsLeft <= 0) _generate();
-});
-
-setState(() {
-  _code = code;
-  _secondsLeft = left;
-  _busy = false;
-});
-}
-
-String _mmss(int s) {
-final m = (s ~/ 60).toString().padLeft(2,'0');
-final ss = (s % 60).toString().padLeft(2,'0');
-return '$m:$ss';
-}
-
-@override
-Widget build(BuildContext context) {
-return Scaffold(
-appBar: AppBar(title: const Text('Synchroniser PC Windows')),
-body: Padding(
-padding: const EdgeInsets.all(16),
-child: Center(
-child: ConstrainedBox(
-constraints: const BoxConstraints(maxWidth: 520),
-child: Column(
-mainAxisSize: MainAxisSize.min,
-children: [
-const Text('Entre ce code sur le PC Windows :', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-const SizedBox(height: 16),
-Container(
-padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
-decoration: BoxDecoration(
-borderRadius: BorderRadius.circular(18),
-color: Theme.of(context).colorScheme.surface.withOpacity(0.90),
-border: Border.all(color: const Color(0xFFE8E8E8)),
-),
-child: Text(
-_code,
-style: const TextStyle(fontSize: 44, fontWeight: FontWeight.w900, letterSpacing: 6),
-),
-),
-const SizedBox(height: 10),
-Text('Valable encore ${_mmss(_secondsLeft)} • Nouveau code automatique', style: const TextStyle(fontWeight: FontWeight.w700)),
-const SizedBox(height: 16),
-OutlinedButton.icon(
-onPressed: _busy ? null : _generate,
-icon: const Icon(Icons.refresh),
-label: const Text('Regénérer maintenant'),
-)
-],
-),
-),
-),
-),
-);
-}
-}
-
-// FILE: lib/features/settings/ui_gallery_screen.dart
-import 'package:flutter/material.dart';
-import '../../core/theme/app_themes.dart';
-import '../../state/app_state.dart';
-import '../../state/settings.dart';
-
-class UiGalleryScreen extends StatelessWidget {
-final AppState appState;
-const UiGalleryScreen({super.key, required this.appState});
-
-@override
-Widget build(BuildContext context) {
-final s = appState.settings;
-return Scaffold(
-appBar: AppBar(title: const Text('Galerie UI')),
-body: ListView(
-padding: const EdgeInsets.all(12),
-children: [
-const Text('Thèmes', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
-const SizedBox(height: 8),
-Wrap(
-spacing: 10, runSpacing: 10,
-children: [
-for (final t in AppThemes.all)
-InkWell(
-onTap: () => appState.saveSettings(AppSettings.fromJson({...s.toJson(), 'themeId': t.id})),
-borderRadius: BorderRadius.circular(20),
-child: Container(
-padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-decoration: BoxDecoration(
-color: (t.id == s.themeId) ? t.seed.withOpacity(0.25) : Colors.white.withOpacity(0.85),
-borderRadius: BorderRadius.circular(20),
-border: Border.all(color: (t.id == s.themeId) ? t.seed : const Color(0xFFE8E8E8)),
-),
-child: Row(mainAxisSize: MainAxisSize.min, children: [
-Container(width: 14, height: 14, decoration: BoxDecoration(color: t.seed, shape: BoxShape.circle)),
-const SizedBox(width: 8),
-Text(t.name, style: const TextStyle(fontWeight: FontWeight.w800)),
-]),
-),
-)
-],
-),
-],
-),
-);
-}
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// FEATURES: WINDOWS PAIRING
-////////////////////////////////////////////////////////////////////////////////
-
-// FILE: lib/features/pairing/windows_pairing_screen.dart
-import 'package:flutter/material.dart';
-import '../../services/functions_service.dart';
-import '../../services/local_store.dart';
-import '../../state/app_state.dart';
-
-class WindowsPairingScreen extends StatefulWidget {
-final AppState appState;
-const WindowsPairingScreen({super.key, required this.appState});
-
-@override
-State<WindowsPairingScreen> createState() => _WindowsPairingScreenState();
-}
-
-class _WindowsPairingScreenState extends State<WindowsPairingScreen> {
-final _ctl = TextEditingController();
-bool _busy = false;
-String? _error;
-
-Future<void> _connect() async {
-final code = _ctl.text.trim();
-if (!RegExp(r'^\d{6}$').hasMatch(code)) {
-setState(() => _error = 'Code à 6 chiffres.');
-return;
-}
-setState(() { _busy = true; _error = null; });
-try {
-  final res = await FunctionsService.redeemPairingCode(code);
-  final profileId = (res['profileId'] ?? '').toString();
-  if (profileId.isEmpty) throw Exception('profileId manquant');
-
-  await LocalStore.setWindowsProfileId(profileId);
-  widget.appState.profileId = profileId;
-  await widget.appState.refreshSnapshot();
-
-  if (!mounted) return;
-  Navigator.pop(context);
-} catch (_) {
-  setState(() => _error = 'Impossible de connecter. Vérifie le code (3 minutes).');
-} finally {
-  setState(() => _busy = false);
-}
-}
-
-@override
-Widget build(BuildContext context) {
-return Scaffold(
-appBar: AppBar(title: const Text('Connecter ce PC')),
-body: Center(
-child: ConstrainedBox(
-constraints: const BoxConstraints(maxWidth: 420),
-child: Padding(
-padding: const EdgeInsets.all(16),
-child: Column(
-mainAxisSize: MainAxisSize.min,
-children: [
-const Text('Demande le code au parent sur le téléphone.', style: TextStyle(fontWeight: FontWeight.w800)),
-const SizedBox(height: 14),
-TextField(
-controller: _ctl,
-keyboardType: TextInputType.number,
-maxLength: 6,
-decoration: InputDecoration(
-labelText: 'Code (6 chiffres)',
-errorText: _error,
-border: const OutlineInputBorder(),
-),
-),
-const SizedBox(height: 10),
-FilledButton.icon(
-onPressed: _busy ? null : _connect,
-icon: _busy
-? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-: const Icon(Icons.link),
-label: const Text('Connecter'),
-),
-],
-),
-),
-),
-),
-);
-}
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// FUNCTIONS (Node/TS)
-////////////////////////////////////////////////////////////////////////////////
-
-// FILE: functions/package.json
-{
-"name": "functions",
-"private": true,
-"engines": { "node": "18" },
-"main": "lib/index.js",
-"scripts": {
-"build": "tsc",
-"lint": "echo "no lint"",
-"serve": "firebase emulators:start --only functions",
-"deploy": "firebase deploy --only functions",
-"logs": "firebase functions:log"
-},
-"dependencies": {
-"firebase-admin": "^12.7.0",
-"firebase-functions": "^5.1.1"
-},
-"devDependencies": {
-"typescript": "^5.6.3"
-}
-}
-
-// FILE: functions/tsconfig.json
-{
-"compilerOptions": {
-"module": "commonjs",
-"noImplicitReturns": true,
-"noUnusedLocals": true,
-"outDir": "lib",
-"sourceMap": true,
-"strict": true,
-"target": "es2020"
-},
-"compileOnSave": true,
-"include": ["src"]
-}
-
-// FILE: functions/src/index.ts
-import * as functions from "firebase-functions";
-import * as admin from "firebase-admin";
-admin.initializeApp();
-const db = admin.firestore();
-
-function random6Digits(): string {
-return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-async function ensureProfile(profileId: string, ownerUid: string) {
-const ref = db.collection("profiles").doc(profileId);
-const snap = await ref.get();
-if (snap.exists) return;
-
-await ref.set({
-ownerUid,
-allowedUids: admin.firestore.FieldValue.arrayUnion(ownerUid),
-createdAt: admin.firestore.FieldValue.serverTimestamp(),
-updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-settings: {
-themeId: "T2",
-capitalsEUEnabled: true,
-pinnedCityIds: ["FR_PARIS", "RU_MOSCOW", "RU_SAMARA"],
-uiModels: { clockId: "CLOCK_10", weatherId: "WEATHER_01", plannerId: "PLANNER_02" },
-timeFormat24h: true
-}
-}, { merge: true });
-}
-
-async function assertAllowed(profileId: string, uid: string) {
-const ref = db.collection("profiles").doc(profileId);
-const snap = await ref.get();
-if (!snap.exists) throw new functions.https.HttpsError("not-found", "Profile not found.");
-const allowed = (snap.data()!.allowedUids ?? []) as string[];
-if (!allowed.includes(uid)) throw new functions.https.HttpsError("permission-denied", "Not allowed.");
-}
-
-export const generatePairingCode = functions.https.onCall(async (_, context) => {
-if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required.");
-const ownerUid = context.auth.uid;
-
-await ensureProfile(ownerUid, ownerUid);
-
-const code = random6Digits();
-const expiresAt = admin.firestore.Timestamp.fromMillis(Date.now() + 180_000);
-
-await db.collection("pairingCodes").doc(code).set({
-profileId: ownerUid,
-expiresAt,
-used: false,
-createdAt: admin.firestore.FieldValue.serverTimestamp(),
-});
-
-return { code, expiresAt: expiresAt.toMillis() };
-});
-
-export const redeemPairingCode = functions.https.onCall(async (data, context) => {
-if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required.");
-const uidWindows = context.auth.uid;
-const code = (data?.code ?? "").toString();
-if (!/^\d{6}$/.test(code)) throw new functions.https.HttpsError("invalid-argument", "Invalid code.");
-
-const codeRef = db.collection("pairingCodes").doc(code);
-const snap = await codeRef.get();
-if (!snap.exists) throw new functions.https.HttpsError("not-found", "Code not found.");
-
-const doc = snap.data()!;
-if (doc.used === true) throw new functions.https.HttpsError("failed-precondition", "Code already used.");
-const expiresAt: admin.firestore.Timestamp = doc.expiresAt;
-if (expiresAt.toMillis() < Date.now()) throw new functions.https.HttpsError("deadline-exceeded", "Code expired.");
-
-const profileId = doc.profileId as string;
-
-await db.runTransaction(async (tx) => {
-tx.update(db.collection("profiles").doc(profileId), {
-allowedUids: admin.firestore.FieldValue.arrayUnion(uidWindows),
-updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-});
-tx.update(codeRef, {
-used: true,
-usedAt: admin.firestore.FieldValue.serverTimestamp(),
-usedByUid: uidWindows,
-});
-});
-
-return { ok: true, profileId };
-});
-
-export const getSnapshot = functions.https.onCall(async (data, context) => {
-if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required.");
-const uid = context.auth.uid;
-
-const profileId = (data?.profileId ?? "").toString();
-if (!profileId) throw new functions.https.HttpsError("invalid-argument", "profileId required.");
-
-// Permet au owner de créer son profil "lazy"
-if (uid === profileId) await ensureProfile(profileId, uid);
-
-await assertAllowed(profileId, uid);
-
-const profileSnap = await db.collection("profiles").doc(profileId).get();
-const settings = profileSnap.data()!.settings ?? {};
-const allowedUids = profileSnap.data()!.allowedUids ?? [];
-
-const eventsSnap = await db.collection("profiles").doc(profileId).collection("events").get();
-const alarmsSnap = await db.collection("profiles").doc(profileId).collection("alarms").get();
-const todosSnap = await db.collection("profiles").doc(profileId).collection("todos").get();
-
-return {
-profileId,
-allowedUids,
-settings,
-events: eventsSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-alarms: alarmsSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-todos: todosSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-};
-});
-
-export const updateSettings = functions.https.onCall(async (data, context) => {
-if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required.");
-const uid = context.auth.uid;
-
-const profileId = (data?.profileId ?? "").toString();
-const settings = data?.settings ?? null;
-if (!profileId || !settings) throw new functions.https.HttpsError("invalid-argument", "Missing args.");
-
-await assertAllowed(profileId, uid);
-
-await db.collection("profiles").doc(profileId).set({
-settings,
-updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-}, { merge: true });
-
-return { ok: true };
-});
-
-export const upsertEvent = functions.https.onCall(async (data, context) => {
-if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required.");
-const uid = context.auth.uid;
-
-const profileId = (data?.profileId ?? "").toString();
-const event = data?.event ?? null;
-if (!profileId || !event) throw new functions.https.HttpsError("invalid-argument", "Missing args.");
-
-await assertAllowed(profileId, uid);
-
-const id = (event.id ?? "").toString();
-const ref = id.isEmpty
-? db.collection("profiles").doc(profileId).collection("events").doc()
-: db.collection("profiles").doc(profileId).collection("events").doc(id);
-
-await ref.set({
-title: event.title ?? "",
-typeId: event.typeId ?? "OTHER",
-startAt: event.startAt ?? null,
-endAt: event.endAt ?? null,
-reminderMinutes: event.reminderMinutes ?? 0,
-updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-createdAt: admin.firestore.FieldValue.serverTimestamp(),
-}, { merge: true });
-
-return { ok: true, id: ref.id };
-});
-
-export const deleteEvent = functions.https.onCall(async (data, context) => {
-if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required.");
-const uid = context.auth.uid;
-
-const profileId = (data?.profileId ?? "").toString();
-const eventId = (data?.eventId ?? "").toString();
-if (!profileId || !eventId) throw new functions.https.HttpsError("invalid-argument", "Missing args.");
-
-await assertAllowed(profileId, uid);
-await db.collection("profiles").doc(profileId).collection("events").doc(eventId).delete();
-return { ok: true };
-});
-
-export const upsertAlarm = functions.https.onCall(async (data, context) => {
-if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required.");
-const uid = context.auth.uid;
-
-const profileId = (data?.profileId ?? "").toString();
-const alarm = data?.alarm ?? null;
-if (!profileId || !alarm) throw new functions.https.HttpsError("invalid-argument", "Missing args.");
-
-await assertAllowed(profileId, uid);
-
-const id = (alarm.id ?? "").toString();
-const ref = id.isEmpty
-? db.collection("profiles").doc(profileId).collection("alarms").doc()
-: db.collection("profiles").doc(profileId).collection("alarms").doc(id);
-
-await ref.set({
-label: alarm.label ?? "Réveil",
-hour: alarm.hour ?? 7,
-minute: alarm.minute ?? 30,
-weekdays: alarm.weekdays ?? [1,2,3,4,5],
-enabled: alarm.enabled ?? true,
-snoozeMinutes: alarm.snoozeMinutes ?? 10,
-updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-createdAt: admin.firestore.FieldValue.serverTimestamp(),
-}, { merge: true });
-
-return { ok: true, id: ref.id };
-});
-
-export const deleteAlarm = functions.https.onCall(async (data, context) => {
-if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required.");
-const uid = context.auth.uid;
-
-const profileId = (data?.profileId ?? "").toString();
-const alarmId = (data?.alarmId ?? "").toString();
-if (!profileId || !alarmId) throw new functions.https.HttpsError("invalid-argument", "Missing args.");
-
-await assertAllowed(profileId, uid);
-await db.collection("profiles").doc(profileId).collection("alarms").doc(alarmId).delete();
-return { ok: true };
-});
-
-export const upsertTodo = functions.https.onCall(async (data, context) => {
-if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required.");
-const uid = context.auth.uid;
-
-const profileId = (data?.profileId ?? "").toString();
-const todo = data?.todo ?? null;
-if (!profileId || !todo) throw new functions.https.HttpsError("invalid-argument", "Missing args.");
-
-await assertAllowed(profileId, uid);
-
-const id = (todo.id ?? "").toString();
-const ref = id.isEmpty
-? db.collection("profiles").doc(profileId).collection("todos").doc()
-: db.collection("profiles").doc(profileId).collection("todos").doc(id);
-
-await ref.set({
-title: todo.title ?? "",
-done: todo.done ?? false,
-tag: todo.tag ?? "Autre",
-color: todo.color ?? 0xFF3A86FF,
-dueIso: todo.dueIso ?? null,
-updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-createdAt: admin.firestore.FieldValue.serverTimestamp(),
-}, { merge: true });
-
-return { ok: true, id: ref.id };
-});
-
-export const deleteTodo = functions.https.onCall(async (data, context) => {
-if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required.");
-const uid = context.auth.uid;
-
-const profileId = (data?.profileId ?? "").toString();
-const todoId = (data?.todoId ?? "").toString();
-if (!profileId || !todoId) throw new functions.https.HttpsError("invalid-argument", "Missing args.");
-
-await assertAllowed(profileId, uid);
-await db.collection("profiles").doc(profileId).collection("todos").doc(todoId).delete();
-return { ok: true };
-});
-
-***
-
-## À faire juste après le collage
-1) Mets tes drapeaux SVG dans `assets/flags/` (au minimum `fr.svg`, `ru.svg`, et les pays UE que tu veux afficher).  
-2) Configure Firebase (Android + Web) et remplace `lib/firebase_options.dart` (idéalement via FlutterFire).[6]
-3) Déploie `functions` + `firestore.rules`.
-
-Si tu me dis le **nom exact** du repo + si tu veux publier en **open‑source** ou privé, je te donne une `.gitignore` “propre” (commit ou non de `firebase_options.dart`) et un `CREDITS.md` minimal (sans recopier de texte sous copyright).
